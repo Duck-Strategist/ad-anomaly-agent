@@ -139,7 +139,7 @@ MQL:  {"metrics":["acos"], "dimensions":["ad_group"],
 - **数据库**：PostgreSQL。应用查询用只读角色 + `statement_timeout`；执行动作用一个单独的、权限最小的写角色（只能改 `ad_groups.status` 和写审计表）
 - **编排**：LangGraph（状态流转、checkpoint、`interrupt`）
 - **LangChain**：轻度使用（模型调用 / 结构化输出），也可以直接用模型 SDK。语义层编译器、工具层、权限注入都手写，不用框架现成的 SQL Chain
-- **模型**：以国产 API 为主（DeepSeek / Qwen 系列），旗舰模型做主力，小模型用于调试。具体型号在第 1 天用约 20 道题小测后确定
+- **模型**：主力 DeepSeek（`deepseek-flash`），judge 千问（`qwen-plus`），调试 `qwen-flash`（2026-11-09 小测后确定，见 Q6）。模型名配置在 `.env`，代码里不写死
 - **观测**：Langfuse（Docker 自托管）
 - **预算**：API 费用 ≤ ¥100/月；全量评测只在里程碑时跑
 - **前端**：极简单页；**部署**：Docker Compose
@@ -429,7 +429,7 @@ net_roas = ROAS × 退款因子               （退款因子 = net_roas / roas�
 
 **Q5. ~~LLM judge 细节~~**：已于 2026-11-05 确认，见第九节。judge rubric 的 4 条措辞仍是草案，在人工标注前定稿。
 
-**Q6. 模型具体型号**：第 1 天小测之后确定主力和调试模型，并写回本文档。
+**Q6. ~~模型具体型号~~**：已于 2026-11-09 确定。主力模型用 DeepSeek（`deepseek-flash`），judge 用千问（`qwen-plus`；第 2 周校准时再和 `qwen-max` / 推理模式比较 κ），调试用 `qwen-flash`。依据：M1 的 40 题上，本方案用两个模型都是 40/40，区分不出准确率；DeepSeek 平均耗时更短，并且在 Text-to-SQL 基线上明显更强（39/40 vs 15/40），说明它的规则理解能力更好。详见 `eval/RESULTS.md`。
 
 **Q7. ~~范围风险~~**：已于 2026-11-05 确认，见第五节"砍范围预案"。
 

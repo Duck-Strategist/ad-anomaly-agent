@@ -181,7 +181,7 @@ def _compile_window(mql: MQL, cat: Catalog, allowed: list[str], start: date, end
     for m in mql.metrics:
         spec = cat.metrics[m]
         expr = _formula_sql(spec["formula"])
-        digits = {"ratio": 4, "money": 2}.get(spec["unit"])
+        digits = {"ratio": 6, "money": 2}.get(spec["unit"])
         metric_cols.append(f"ROUND(({expr})::numeric, {digits}) AS {m}" if digits else f"{expr} AS {m}")
 
     order = (f"{mql.order_by.metric} {'DESC' if mql.order_by.desc else 'ASC'} NULLS LAST"

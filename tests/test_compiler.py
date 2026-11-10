@@ -169,7 +169,7 @@ def test_uk_refund_rate_during_refund_spike_three_ways(csv_orders):
         FROM lines l JOIN fx_rates fx ON fx.rate_date = l.d AND fx.currency = 'GBP'
         WHERE l.d BETWEEN %(s)s AND %(e)s""", {"s": start, "e": end})
     py = window_sum(refund, sku="UK-SKU05", start=start, end=end) / window_sum(gross, sku="UK-SKU05", start=start, end=end)
-    assert rows[0]["refund_rate"] == round(hand, 4) == round(py, 4)
+    assert rows[0]["refund_rate"] == round(hand, 6) == round(py, 6)
     assert rows[0]["refund_rate"] > Decimal("0.2")   # 事件确实埋进去了
 
 
@@ -179,7 +179,7 @@ def test_us_ad_roas_by_ad_group_matches_hand_sql():
     got = {r["ad_group"]: r["roas"] for r in rows}
     with reader_conn() as conn:
         hand = dict(conn.execute("""
-            SELECT ad_group_id, ROUND(SUM(ad_sales) / SUM(spend), 4)   -- 同币种，汇率约掉
+            SELECT ad_group_id, ROUND(SUM(ad_sales) / SUM(spend), 6)   -- 同币种，汇率约掉
             FROM ad_daily_stats WHERE ad_group_id LIKE 'US-%%' AND stat_date BETWEEN '2026-11-02' AND '2026-11-08'
             GROUP BY 1""").fetchall())
     assert got == hand
