@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16.4
+    environment:
+      POSTGRES_DB: adagent
+      POSTGRES_USER: app_admin
+      POSTGRES_PASSWORD: admin_dev
+    ports:
+      - "54329:5432"   # 宿主机用 54329，避免和本机可能已有的 PostgreSQL 冲突
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # 容器第一次初始化（数据卷为空）时，按文件名顺序执行这里的 .sql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_admin -d adagent"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

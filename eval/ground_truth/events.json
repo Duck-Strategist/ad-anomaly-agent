@@ -1,0 +1,88 @@
+[
+  {
+    "event_id": "E1",
+    "type": "cvr_drop",
+    "shop_id": "US",
+    "ad_group_id": "US-AG07",
+    "sku_id": "US-SKU07",
+    "start": "2026-11-02",
+    "end": "2026-11-08",
+    "effects": {
+      "cvr": 0.4,
+      "organic": 0.4
+    },
+    "main_cause": "cvr",
+    "suggest_pause": true
+  },
+  {
+    "event_id": "E2",
+    "type": "cvr_drop",
+    "shop_id": "JP",
+    "ad_group_id": "JP-AG04",
+    "sku_id": "JP-SKU04",
+    "start": "2026-09-28",
+    "end": "2026-10-04",
+    "effects": {
+      "cvr": 0.4,
+      "organic": 0.4
+    },
+    "main_cause": "cvr",
+    "suggest_pause": true
+  },
+  {
+    "event_id": "E3",
+    "type": "refund_spike",
+    "shop_id": "UK",
+    "ad_group_id": "UK-AG05",
+    "sku_id": "UK-SKU05",
+    "start": "2026-10-12",
+    "end": "2026-10-18",
+    "effects": {
+      "refund_rate": 0.3
+    },
+    "main_cause": "refund",
+    "suggest_pause": false
+  },
+  {
+    "event_id": "E4",
+    "type": "refund_spike",
+    "shop_id": "US",
+    "ad_group_id": "US-AG03",
+    "sku_id": "US-SKU03",
+    "start": "2026-09-07",
+    "end": "2026-09-13",
+    "effects": {
+      "refund_rate": 0.3
+    },
+    "main_cause": "refund",
+    "suggest_pause": false
+  },
+  {
+    "event_id": "E5",
+    "type": "aov_drop",
+    "shop_id": "UK",
+    "ad_group_id": "UK-AG02",
+    "sku_id": "UK-SKU02",
+    "start": "2026-09-21",
+    "end": "2026-09-27",
+    "effects": {
+      "price": 0.7
+    },
+    "main_cause": "ad_aov",
+    "suggest_pause": false
+  },
+  {
+    "event_id": "E6",
+    "type": "aov_drop",
+    "shop_id": "JP",
+    "ad_group_id": "JP-AG08",
+    "sku_id": "JP-SKU08",
+    "start": "2026-10-19",
+    "end": "2026-10-25",
+    "effects": {
+      "price": 0.7
+    },
+    "main_cause": "ad_aov",
+    "suggest_pause": false
+  }
+]

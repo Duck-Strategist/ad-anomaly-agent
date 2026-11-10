@@ -1,0 +1,96 @@
+# 合成数据生成配置。固定随机种子 → 每次生成结果完全一样。
+seed: 20261105
+
+# 店铺本地日期范围（含首尾），共 90 天。覆盖英国（10-25）和美国（11-01）的夏令时切换
+start_date: 2026-08-11
+end_date: 2026-11-08
+
+shops:
+  - {shop_id: US, name: "US Store", marketplace: amazon.com,   currency: USD, timezone: America/Los_Angeles,
+     n_skus: 18, n_ad_groups: 10, n_campaigns: 3, price_range: [12, 60],     cpc_range: [0.55, 1.10]}
+  - {shop_id: UK, name: "UK Store", marketplace: amazon.co.uk, currency: GBP, timezone: Europe/London,
+     n_skus: 16, n_ad_groups: 10, n_campaigns: 3, price_range: [10, 48],     cpc_range: [0.45, 0.90]}
+  - {shop_id: JP, name: "JP Store", marketplace: amazon.co.jp, currency: JPY, timezone: Asia/Tokyo,
+     n_skus: 16, n_ad_groups: 10, n_campaigns: 2, price_range: [1500, 8000], cpc_range: [70, 140]}
+
+# 每个广告组的基础参数在区间内随机抽取
+ads:
+  impressions_range: [6000, 20000]   # 每天曝光。2026-11-09 翻倍：每组每周订单太少时，转化率随机波动会淹没事件信号
+  ctr_range: [0.004, 0.010]
+  cvr_range: [0.06, 0.12]            # 2026-11-09 从 [0.08, 0.15] 下调，ROAS 回到 2–6 的常见区间
+  hero_click_share: 0.30             # 出现在事件里的广告组是"主力广告组"：固定占店铺点击的 30%（花费占比约 30%）
+  daily_noise_sigma: 0.10            # 曝光的日波动（对数正态）
+  cpc_noise_sigma: 0.05
+  weekend_lift: 1.15                 # 周六日曝光 / 自然订单放大
+  order_lag_probs: [0.70, 0.20, 0.10]  # 广告归因订单实际下单比点击晚 0/1/2 天（报表和订单对不上的来源之一）
+
+orders:
+  organic_per_sku_day: [0.8, 2.5]    # 每个 SKU 每天的自然订单数（泊松均值）
+  qty2_prob: 0.10                    # 一行买 2 件的概率
+  multi_item_prob: 0.10              # 自然订单里含第二个 SKU 的概率
+  duplicate_prob: 0.015              # 陷阱：重复导入后被软删除的订单比例
+
+refunds:
+  base_rate_range: [0.02, 0.06]      # 每个 SKU 的基础退款率（按订单行）
+  full_prob: 0.65                    # 全额退款
+  two_partials_prob: 0.15            # 一个订单行两笔部分退款（扇出陷阱）
+  lag_days: [3, 14]                  # 退款比下单晚几天；晚于数据末尾的退款不生成（近期退款"尚未入账"）
+
+fx:                                  # 1 单位 = 多少 USD，按日随机游走
+  GBP: {start: 1.300, daily_sigma: 0.003}
+  JPY: {start: 0.00670, daily_sigma: 0.003}
+
+# ---------- 埋入事件（归因题真值）----------
+# ⚠️ 幅度和日期是初始值（SPEC 开放问题 Q3），生成后看曲线再调。
+# 日期为店铺本地日期，含首尾。ad_group 序号对应 {shop}-AG{nn}。
+# 效果是乘数：cvr 影响广告和自然转化，price 影响成交单价，refund 影响该期间下单的订单行退款率。
+events:
+  - id: E1
+    type: cvr_drop
+    shop: US
+    ad_group: 7
+    start: 2026-11-02          # 放在最近一周：演示"美国店最近 ROAS 为什么掉了"
+    end: 2026-11-08
+    effects: {cvr: 0.40, organic: 0.40}
+  - id: E2
+    type: cvr_drop
+    shop: JP                   # 日本 UTC+9，按 UTC 切日会错位，覆盖时区陷阱
+    ad_group: 4
+    start: 2026-09-28
+    end: 2026-10-04
+    effects: {cvr: 0.40, organic: 0.40}
+  - id: E3
+    type: refund_spike
+    shop: UK
+    ad_group: 5
+    start: 2026-10-12          # 结束于数据末尾 14 天以前，保证退款已全部生成
+    end: 2026-10-18
+    effects: {refund_rate: 0.30}   # 事件期间下单的订单行，退款率固定为 30%
+  - id: E4
+    type: refund_spike
+    shop: US
+    ad_group: 3
+    start: 2026-09-07
+    end: 2026-09-13
+    effects: {refund_rate: 0.30}   # 事件期间下单的订单行，退款率固定为 30%
+  - id: E5
+    type: aov_drop
+    shop: UK
+    ad_group: 2
+    start: 2026-09-21
+    end: 2026-09-27
+    effects: {price: 0.70}     # 促销降价。不加转化提升，让客单价成为唯一变化因素（2026-11-09）
+  - id: E6
+    type: aov_drop
+    shop: JP
+    ad_group: 8
+    start: 2026-10-19
+    end: 2026-10-25
+    effects: {price: 0.70}
+
+# 演示用户（权限表）
+users:
+  - {user_id: u_admin,     shops: [US, UK, JP], role: approver}
+  - {user_id: u_ops_us,    shops: [US],         role: approver}
+  - {user_id: u_ops_uk,    shops: [UK],         role: approver}
+  - {user_id: u_viewer_us, shops: [US],         role: viewer}   # 有查看权限、无审批权限

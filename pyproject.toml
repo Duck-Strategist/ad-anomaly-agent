@@ -1,0 +1,15 @@
+[project]
+name = "ad-anomaly-agent"
+version = "0.1.0"
+description = "跨境卖家经营异常归因与处置 Agent"
+requires-python = ">=3.12"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
