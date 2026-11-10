@@ -1,0 +1,61 @@
+# 指标目录：口径的唯一来源。编译器按它生成 SQL，LLM 的 prompt 也从它生成。
+# 修改口径只改这里，不改 prompt、不改编译器。
+
+reporting_currency: USD
+# 系统的"今天"（店铺本地日期）。固定为数据最后一天，保证评测结果可复现，不随运行日期变化。
+today: 2026-11-08
+# 下单日在"今天"之前多少天以内的订单，退款可能还没发生（数据里退款比下单晚 3–14 天）
+refund_settle_days: 14
+
+# ---------- 维度 ----------
+# sources：哪一侧的数据有这个维度。ad = 广告日报，order = 订单
+dimensions:
+  date:     {sources: [ad, order], desc: "店铺本地日期"}
+  week:     {sources: [ad, order], desc: "店铺本地日期所在周的周一"}
+  shop:     {sources: [ad, order], desc: "店铺：US / UK / JP"}
+  sku:      {sources: [ad, order], desc: "商品 SKU"}
+  ad_group: {sources: [ad],        desc: "广告组（1 个广告组只推 1 个 SKU）"}
+  campaign: {sources: [ad],        desc: "广告活动"}
+
+# ---------- 基础度量：在对应一侧的子查询里聚合 ----------
+# money: true 表示金额，按行乘以当天汇率换算成报告币种后再求和
+measures:
+  ad_spend:      {source: ad,    agg: sum,            expr: "s.spend",                 money: true}
+  impressions:   {source: ad,    agg: sum,            expr: "s.impressions"}
+  clicks:        {source: ad,    agg: sum,            expr: "s.clicks"}
+  ad_orders:     {source: ad,    agg: sum,            expr: "s.ad_orders"}
+  ad_sales:      {source: ad,    agg: sum,            expr: "s.ad_sales",              money: true}
+  gross_sales:   {source: order, agg: sum,            expr: "oi.qty * oi.unit_price",  money: true}
+  refund_amount: {source: order, agg: sum,            expr: "COALESCE(r.amount, 0)",   money: true}
+  order_count:   {source: order, agg: count_distinct, expr: "o.order_id"}
+  # 特殊度量：Σ_SKU ad_sales × (1 − 该 SKU 同一统计单元内的退款率)，由编译器单独生成子查询
+  net_ad_sales:  {source: special}
+
+# ---------- 可查询的指标 ----------
+# 派生指标一律"先求和再相除"：formula 里引用的都是求和后的基础度量
+metrics:
+  ad_spend:      {formula: "ad_spend",                     desc: "广告花费",                         unit: money}
+  impressions:   {formula: "impressions",                  desc: "广告曝光",                         unit: count}
+  clicks:        {formula: "clicks",                       desc: "广告点击",                         unit: count}
+  ad_orders:     {formula: "ad_orders",                    desc: "平台归因的广告订单数",             unit: count}
+  ad_sales:      {formula: "ad_sales",                     desc: "平台归因的广告销售额（广告报表口径）", unit: money}
+  ctr:           {formula: "clicks / impressions",         desc: "点击率",                           unit: ratio}
+  cpc:           {formula: "ad_spend / clicks",            desc: "单次点击花费",                     unit: money}
+  cvr:           {formula: "ad_orders / clicks",           desc: "广告转化率",                       unit: ratio}
+  ad_aov:        {formula: "ad_sales / ad_orders",         desc: "广告客单价",                       unit: money}
+  acos:          {formula: "ad_spend / ad_sales",          desc: "广告花费占广告销售额比例",         unit: ratio}
+  roas:          {formula: "ad_sales / ad_spend",          desc: "广告投入产出比（广告报表口径，不扣退款）", unit: ratio}
+  gross_sales:   {formula: "gross_sales",                  desc: "订单销售额（含退款，不含软删除订单）", unit: money}
+  refund_amount: {formula: "refund_amount",                desc: "退款金额（归属到原订单的下单日）", unit: money}
+  net_sales:     {formula: "gross_sales - refund_amount",  desc: "订单销售额扣除退款",               unit: money}
+  refund_rate:   {formula: "refund_amount / gross_sales",  desc: "退款率",                           unit: ratio}
+  order_count:   {formula: "order_count",                  desc: "订单数",                           unit: count}
+  aov:           {formula: "gross_sales / order_count",    desc: "订单客单价（订单口径）",           unit: money}
+  tacos:         {formula: "ad_spend / gross_sales",       desc: "广告花费占店铺总销售额比例",       unit: ratio}
+  net_roas:      {formula: "net_ad_sales / ad_spend",      desc: "扣除退款后的 ROAS（按 SKU 退款率折算广告销售额）", unit: ratio}
+
+# ---------- 多口径说法：触发歧义反问（给 LLM 用，编译器不读） ----------
+ambiguous_terms:
+  销售额: [gross_sales, net_sales, ad_sales]
+  ROI:    [roas, tacos, net_roas]
+  广告效果: [roas, tacos, net_roas]
