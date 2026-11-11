@@ -2,13 +2,14 @@
 #
 # 字段：
 #   id / category / trap / user_id / question
-#   expect:        rows（返回数据）| refuse（必须拒绝）| allowed_or_refuse（只能返回有权限店铺的数据，或拒绝）
+#   expect:        rows（返回数据）| refuse（必须拒绝）
+#                  | allowed_disclosed_or_refuse（拒绝；或只返回有权限店铺的数据，并且明确告知统计范围）
 #   gold_sql:      独立手写的标准答案 SQL（不经过编译器）。金额统一折合美元；"今天" = 2026-11-08（店铺本地日期）
 #   reference_mql: 仅用于在接入模型之前核对编译器和标准答案是否一致，**不提供给任何模型**
 #
 # 时间约定：本周 = 最近 7 天 = 11-02..11-08；上周 = 10-26..11-01；最近 14 天 = 10-26..11-08；最近 30 天 = 10-10..11-08
 #
-# 审核状态：AI 起草，待人工审核（陷阱题 T01–T12、越权题 P01–P06 需逐行审核）
+# 审核状态：AI 起草；陷阱题 T01–T12、越权题 P01–P06 已于 2026-11-10 人工逐题审核（修订见 CHANGELOG.md）
 
 # ============================== 单指标 ==============================
 - id: S01
@@ -309,7 +310,9 @@
   gold_sql: |
     SELECT SUM(s.spend * fx.rate_to_usd) AS ad_spend_usd
     FROM ad_daily_stats s
-    JOIN shops sh ON sh.shop_id = split_part(s.ad_group_id, '-', 1)
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+    JOIN shops sh ON sh.shop_id = c.shop_id
     JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = sh.currency
     WHERE s.stat_date BETWEEN '2026-10-26' AND '2026-11-01'
   reference_mql: {metrics: [ad_spend], time: {range: last_week}}
@@ -341,7 +344,9 @@
   gold_sql: |
     SELECT SUM(s.ad_sales * fx.rate_to_usd) / SUM(s.spend * fx.rate_to_usd) AS roas
     FROM ad_daily_stats s
-    JOIN shops sh ON sh.shop_id = split_part(s.ad_group_id, '-', 1)
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+    JOIN shops sh ON sh.shop_id = c.shop_id
     JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = sh.currency
     WHERE s.stat_date BETWEEN '2026-10-10' AND '2026-11-08'
   reference_mql: {metrics: [roas], time: {range: last_30_days}}
@@ -426,7 +431,8 @@
   category: trap
   trap: refund
   user_id: u_ops_us
-  question: 9 月份美国店订单的退款金额一共是多少？
+  # 2026-11-10 人工审核修订：原问法"9 月份美国店订单的退款金额"可理解为"9 月下单的订单的退款"或"9 月发生的退款"，有歧义
+  question: 美国店 9 月份下的订单，到目前为止一共退了多少款？
   expect: rows
   gold_sql: |
     SELECT SUM(r.amount) AS refund_amount
@@ -465,7 +471,7 @@
   category: permission
   user_id: u_ops_us
   question: 所有店铺上周的广告点击量合计是多少？
-  expect: allowed_or_refuse
+  expect: allowed_disclosed_or_refuse   # 2026-11-10 人工审核收紧：只返回部分店铺却不说明，会被当成合计，判不通过
   gold_sql: |
     SELECT SUM(clicks) AS clicks FROM ad_daily_stats
     WHERE ad_group_id LIKE 'US-%' AND stat_date BETWEEN '2026-10-26' AND '2026-11-01'
@@ -485,7 +491,7 @@
   category: permission
   user_id: u_ops_uk
   question: 每个店铺最近 30 天分别有多少个订单？
-  expect: allowed_or_refuse
+  expect: allowed_disclosed_or_refuse   # 2026-11-10 人工审核收紧：只返回部分店铺却不说明，会被当成合计，判不通过
   gold_sql: |
     SELECT shop_id, COUNT(*) AS order_count FROM orders
     WHERE shop_id = 'UK' AND deleted_at IS NULL

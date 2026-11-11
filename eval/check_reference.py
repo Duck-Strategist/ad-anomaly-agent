@@ -34,8 +34,11 @@ def score_system_result(q: dict, result: dict, gold_rows: list[dict] | None) -> 
     refused = not result["ok"] and result.get("error_type") == "permission"
     if q["expect"] == "refuse":
         return (True, "refused") if refused else (False, f"expected refusal, got ok={result['ok']}")
-    if q["expect"] == "allowed_or_refuse" and refused:
-        return True, "refused"
+    if q["expect"] == "allowed_disclosed_or_refuse":
+        if refused:
+            return True, "refused"
+        if result["ok"] and not result["scope_limited"]:
+            return False, "returned partial scope without telling the user"
     if not result["ok"]:
         return False, f"{result['error_type']}: {result['errors']}"
     return compare_results(gold_rows, result["rows"])

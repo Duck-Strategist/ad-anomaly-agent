@@ -195,7 +195,8 @@ def _compile_window(mql: MQL, cat: Catalog, allowed: list[str], start: date, end
            f"SELECT {', '.join(dims + metric_cols)}\nFROM {from_sql}"
            + (f"\nORDER BY {order}" if order else "") + ("\nLIMIT %(limit)s" if apply_limit else ""))
 
-    refund_incomplete = bool(ord_measures or need_net) and end > cat.today - timedelta(cat.refund_settle_days)
+    # 只有用到退款的度量才需要提示"近期退款未入账"（订单数、销售额本身不受影响）
+    refund_incomplete = bool("refund_amount" in needed or need_net) and end > cat.today - timedelta(cat.refund_settle_days)
     return CompiledQuery(sql=sql, params=params, window=(start, end),
                          columns=dims + list(mql.metrics), refund_incomplete=refund_incomplete)
 

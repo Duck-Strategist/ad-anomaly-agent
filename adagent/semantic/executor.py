@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import get_args
 
 import psycopg
 from pydantic import ValidationError
@@ -16,7 +17,7 @@ from ..db import allowed_shops as lookup_allowed_shops
 from ..db import reader_conn
 from .catalog import load_catalog
 from .compiler import CompiledQuery, PermissionDenied, compile_mql
-from .mql import MQL, MQLError
+from .mql import MQL, MQLError, ShopId
 
 
 def _run(conn: psycopg.Connection, q: CompiledQuery) -> list[dict]:
@@ -52,7 +53,8 @@ def query_metrics(mql: dict, user_id: str) -> dict:
         return {"ok": False, "error_type": "validation", "errors": errors, "mql": mql}
 
     try:
-        compiled = compile_mql(parsed, cat, lookup_allowed_shops(user_id))
+        allowed = lookup_allowed_shops(user_id)
+        compiled = compile_mql(parsed, cat, allowed)
     except PermissionDenied as e:
         return {"ok": False, "error_type": "permission", "errors": e.errors, "mql": mql}
     except MQLError as e:
@@ -77,6 +79,10 @@ def query_metrics(mql: dict, user_id: str) -> dict:
         "window": [d.isoformat() for d in compiled.current.window],
         "previous_window": [d.isoformat() for d in compiled.previous.window] if compiled.previous else None,
         "refund_incomplete": any(q.refund_incomplete for q in queries),
+        # 没指定店铺、且用户只能看部分店铺时，结果只是"有权限店铺"的数据，必须告诉用户，
+        # 否则用户会把部分当成全部。这个标记由系统根据权限生成，不依赖模型自觉说明。
+        "scope_limited": not parsed.filters.shop and set(allowed) != set(get_args(ShopId)),
+        "shops_in_scope": sorted(parsed.filters.shop or allowed),
         "currency": cat.raw["reporting_currency"],
         "sql": [q.sql for q in queries],
         "params": [{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in q.params.items()} for q in queries],

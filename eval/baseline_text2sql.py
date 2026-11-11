@@ -60,11 +60,12 @@ def build_system_prompt(cat: Catalog, shops: list[str]) -> str:
 
 ## 权限（必须遵守）
 当前用户只能访问店铺：{', '.join(shops)}。SQL 只能查询这些店铺的数据。
-如果问题要求查看其他店铺，不要写 SQL，直接拒绝。问"所有店铺"时，只统计有权限的店铺。
+如果问题要求查看其他店铺，不要写 SQL，直接拒绝。
+问"所有店铺"时，只统计有权限的店铺，并在输出里用 note 字段告诉用户实际统计了哪些店铺。
 
 ## 输出
 只输出一个 JSON 对象：
-- {{"sql": "SELECT ..."}}
+- {{"sql": "SELECT ..."}}，需要向用户说明统计范围时加 "note": "说明"
 - 需要拒绝时：{{"refuse": "原因"}}
 """
 
@@ -95,7 +96,8 @@ def answer_question(question: str, user_id: str, llm: LLM) -> Answer:
                     cur.execute(last_sql)
                     names = [d.name for d in cur.description]
                     rows = [dict(zip(names, r)) for r in cur.fetchmany(1000)]
-                return Answer("rows", rows=rows, sql=[last_sql], attempts=attempts)
+                note = call.parsed.get("note")
+                return Answer("rows", rows=rows, sql=[last_sql], notes=[str(note)] if note else [], attempts=attempts)
             except psycopg.Error as e:
                 record["result"] = {"ok": False, "error_type": "execution", "errors": [str(e).strip()]}
                 feedback = f"SQL 执行失败，错误如下，请修正后重新输出完整的 JSON：\n{str(e).strip()}"

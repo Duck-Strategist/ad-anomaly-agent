@@ -15,7 +15,9 @@ def _connect(prefix: str, **kw) -> psycopg.Connection:
     return psycopg.connect(
         host=os.getenv("PG_HOST", "localhost"), port=os.getenv("PG_PORT", "54329"),
         dbname=os.getenv("PG_DB", "adagent"),
-        user=os.environ[f"{prefix}_USER"], password=os.environ[f"{prefix}_PASSWORD"], **kw,
+        user=os.environ[f"{prefix}_USER"], password=os.environ[f"{prefix}_PASSWORD"],
+        connect_timeout=5,   # 数据库没起来时快速失败，而不是一直挂着
+        **kw,
     )
 
 

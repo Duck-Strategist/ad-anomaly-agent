@@ -85,8 +85,12 @@ def test_refund_incomplete_flag():
     recent = compile_({"metrics": ["net_sales"], "time": {"range": "last_7_days"}})
     old = compile_({"metrics": ["net_sales"], "time": {"range": "custom", "start": "2026-09-01", "end": "2026-09-07"}})
     ads_only = compile_({"metrics": ["roas"], "time": {"range": "last_7_days"}})
+    orders_only = compile_({"metrics": ["order_count", "gross_sales"], "time": {"range": "last_7_days"}})
+    net_roas = compile_({"metrics": ["net_roas"], "time": {"range": "last_7_days"}})
     assert recent.current.refund_incomplete and not old.current.refund_incomplete
     assert not ads_only.current.refund_incomplete
+    assert not orders_only.current.refund_incomplete   # 不涉及退款的订单指标不该提示
+    assert net_roas.current.refund_incomplete
 
 
 # ======================= 集成测试：编译器 vs 手写 SQL vs CSV =======================

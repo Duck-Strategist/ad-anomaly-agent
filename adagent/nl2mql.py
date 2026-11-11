@@ -82,6 +82,7 @@ class Answer:
     mql: dict | None = None
     sql: list[str] | None = None
     refund_incomplete: bool = False
+    notes: list[str] = field(default_factory=list)       # 需要告诉用户的口径 / 范围说明
     attempts: list[dict] = field(default_factory=list)   # 每轮：模型输出、执行结果 / 错误
 
 
@@ -109,8 +110,13 @@ def answer_question(question: str, user_id: str, llm: LLM) -> Answer:
             result = query_metrics(last_mql, user_id)
             record["result"] = {k: result.get(k) for k in ("ok", "error_type", "errors")}
             if result["ok"]:
+                notes = []
+                if result["scope_limited"]:
+                    notes.append(f"仅统计了您有权限的店铺：{', '.join(result['shops_in_scope'])}")
+                if result["refund_incomplete"]:
+                    notes.append("近 14 天的订单退款可能尚未全部发生，退款相关数字可能偏低")
                 return Answer("rows", rows=result["rows"], mql=last_mql, sql=result["sql"],
-                              refund_incomplete=result["refund_incomplete"], attempts=attempts)
+                              refund_incomplete=result["refund_incomplete"], notes=notes, attempts=attempts)
             if result["error_type"] == "permission":
                 return Answer("refused", message="; ".join(result["errors"]), mql=last_mql, attempts=attempts)
             feedback = "这个 MQL 执行失败，错误如下，请修正后重新输出完整的 JSON：\n" + "\n".join(result["errors"])

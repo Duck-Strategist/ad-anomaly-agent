@@ -33,8 +33,11 @@ def score(q: dict, a: Answer, gold: list[dict] | None) -> tuple[bool, str]:
     refused = a.status in ("refused", "cannot_answer")
     if q["expect"] == "refuse":
         return (True, f"refused: {a.message[:80]}") if refused else (False, f"expected refusal, got {a.status}")
-    if q["expect"] == "allowed_or_refuse" and refused:
-        return True, "refused"
+    if q["expect"] == "allowed_disclosed_or_refuse":
+        if refused:
+            return True, "refused"
+        if a.status == "rows" and not a.notes:
+            return False, "returned partial scope without telling the user"
     if a.status != "rows":
         return False, f"{a.status}: {a.message[:120]}"
     return compare_results(gold, a.rows)
@@ -61,7 +64,7 @@ def run_one(q: dict, system: str, model: str) -> dict:
         "question": q["question"], "expect": q["expect"],
         "pass": ok, "reason": why,
         "first_try": ok and len(a.attempts) == 1,
-        "status": a.status, "message": a.message, "mql": a.mql, "sql": a.sql,
+        "status": a.status, "message": a.message, "notes": a.notes, "mql": a.mql, "sql": a.sql,
         "rows": [{k: _jsonable(v) for k, v in r.items()} for r in a.rows[:50]],
         "attempts": a.attempts,
         "prompt_tokens": sum(c.prompt_tokens for c in llm.calls),
