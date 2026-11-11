@@ -35,7 +35,7 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 ```
 
 - Windows 终端跑评测时加 `PYTHONIOENCODING=utf-8`，否则中文输出乱码。
-- `db/init/*.sql` 只在数据卷为空时执行；改了建表脚本要 `docker compose down -v` 后重建并重新导入。
+- `db/init/*.sql` 只在数据卷为空时执行；改了建表脚本要 `docker compose down -v` 后重建并重新导入。已有数据库上加新脚本，可以用 `docker compose exec -T db psql -U app_admin -d adagent < db/init/00X_xxx.sql` 单独执行。
 - `.env` 存 API key 和数据库密码，已被忽略，不要读取或打印 key 的值。模型名配置在 `.env`（主力 DeepSeek，judge 千问，调试 `qwen-flash`）。
 
 ## 代码地图
@@ -47,6 +47,8 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 | `adagent/semantic/` | 指标目录、MQL 校验、编译器、执行器 `query_metrics` |
 | `adagent/nl2mql.py` | 自然语言 → MQL → 查询，带自修正（最多重试 2 次） |
 | `adagent/attribution/decompose.py` | 确定性归因：对数分解 + 广告组贡献度 + z 检验 |
+| `adagent/workflow.py` | LangGraph 工作流：路由 → 问数 / 归因 → 解释 → 提议 → 审批（interrupt）→ 执行；`run()` / `resume()` |
+| `adagent/actions.py` | 唯一的写动作：提议、幂等执行暂停、拒绝 |
 | `adagent/llm.py` | DeepSeek / 千问调用（OpenAI 兼容接口） |
 | `eval/` | 评测题、评分器、基线（Text-to-SQL）、运行器；`eval/ground_truth/events.json` 是事件真值，只给评测用 |
 | `tests/` | 权限、编译器、评分器、分解算法的测试 |
@@ -54,6 +56,6 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 ## 当前进度（2026-11-10）
 
 - **M1 完成**：数据层、语义层、编译器、NL→MQL、Text-to-SQL 基线、40 道评测题（陷阱题和越权题已人工审核）。
-- **M2 进行中**：`decompose_roas` 已完成。
-- **下一步**：LangGraph 归因工作流。按 SPEC 第七节"审批与执行"：`create_proposal` 节点写 pending 审计记录，`approve` 节点只做 `interrupt`，写操作放在后面单独的执行节点；幂等键 + 原子条件更新；checkpoint 用 PostgreSQL。之后是歧义反问、补齐 110 道评测题（含更难的口语化问法）、ReAct 基线、LLM judge 校准。
+- **M2 进行中**：`decompose_roas`、LangGraph 归因工作流（`adagent/workflow.py`）和幂等审批执行（`adagent/actions.py`）已完成。checkpoint 存在 PostgreSQL 的 `graph` schema（`agent_graph` 角色）。
+- **下一步**：歧义反问（用 interrupt）、补齐 110 道评测题（含更难的口语化问法和 25 道归因题）、ReAct 归因基线、LLM judge 校准。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点；归因相对 ReAct 基线的目标待补）。
