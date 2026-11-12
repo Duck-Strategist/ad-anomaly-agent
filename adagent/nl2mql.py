@@ -5,6 +5,9 @@
   2. 调 query_metrics：校验 → 编译 → 注入权限 → 只读执行。
   3. 校验 / 执行报错 → 把错误原文回传给模型重试，最多 MAX_RETRIES 次；超限后降级（返回最后一次的 MQL 和错误供人查看）。
   4. 权限错误不重试：这不是模型能"修好"的问题，应如实告诉用户。
+  5. 多口径说法（"销售额""ROI"等）且上下文无法确定时，模型输出 clarify，返回 status="clarify" 交给工作流反问。
+     反问的词和选项由 clarify.validate_clarify 对照 catalog 校验；用户确认的口径通过 resolved_terms 传回，
+     并检查最终 MQL 确实用了所选指标。
 
 注意：模型不知道用户的权限。权限完全由编译器根据 user_id 判断，prompt 里刻意不提。
 """
@@ -14,6 +17,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from .clarify import check_resolved_used, validate_clarify
 from .llm import LLM
 from .semantic.catalog import Catalog, load_catalog
 from .semantic.executor import query_metrics
@@ -27,6 +31,10 @@ def build_system_prompt(cat: Catalog) -> str:
         for name, spec in cat.metrics.items()
     )
     dim_lines = "\n".join(f"- {name}：{spec['desc']}" for name, spec in cat.dimensions.items())
+    amb_lines = "\n".join(
+        f"- \"{term}\"：" + " / ".join(f"{m}（{cat.metrics[m]['desc']}）" for m in ms)
+        for term, ms in cat.ambiguous_terms.items()
+    )
     return f"""你是跨境电商经营数据助手。你的任务是把用户的问题翻译成 MQL（一种结构化的指标查询 JSON）。
 你不写 SQL；系统会把 MQL 编译成 SQL 并负责汇率换算、时区、软删除、退款口径和权限。
 
@@ -57,9 +65,17 @@ def build_system_prompt(cat: Catalog) -> str:
 }}
 不要输出格式之外的字段。"所有店铺 / 全部店铺"不要加 shop 过滤。
 
+## 多口径说法
+下面这些说法对应多个指标：
+{amb_lines}
+只有当问题里用了这些说法、并且上下文没有任何信息能确定是哪个指标时，才反问用户，不要猜。
+如果问题里有能确定口径的限定（例如"广告销售额"就是 ad_sales），或者直接说了具体指标名（如 ROAS、ACOS），不要反问，直接输出 MQL。
+反问时 options 只列出在这个问题里确实说得通的候选（至少 2 个）。
+
 ## 输出
 只输出一个 JSON 对象：
 - 能回答：{{"mql": {{...}}}}
+- 需要反问口径：{{"clarify": {{"term": "说法原文，必须是上面列出的说法之一", "options": ["指标名", ...]}}}}
 - 问题与经营数据无关或指标不存在：{{"cannot_answer": "原因"}}
 
 ## 示例
@@ -76,20 +92,27 @@ def build_system_prompt(cat: Catalog) -> str:
 
 @dataclass
 class Answer:
-    status: str                         # rows | refused | cannot_answer | failed
+    status: str                         # rows | clarify | refused | cannot_answer | failed
     rows: list[dict] = field(default_factory=list)
     message: str = ""
     mql: dict | None = None
     sql: list[str] | None = None
     refund_incomplete: bool = False
+    clarify: dict | None = None         # status="clarify" 时：{"term", "options"}
     notes: list[str] = field(default_factory=list)       # 需要告诉用户的口径 / 范围说明
     attempts: list[dict] = field(default_factory=list)   # 每轮：模型输出、执行结果 / 错误
 
 
-def answer_question(question: str, user_id: str, llm: LLM) -> Answer:
+def answer_question(question: str, user_id: str, llm: LLM, resolved_terms: dict[str, str] | None = None) -> Answer:
+    """resolved_terms：用户在反问中确认过的口径，如 {"销售额": "net_sales"}。"""
     cat = load_catalog()
+    resolved = resolved_terms or {}
+    user_msg = question
+    if resolved:
+        user_msg += "\n\n（用户已确认口径：" + "；".join(
+            f'"{t}" 指 {m}（{cat.metrics[m]["desc"]}）' for t, m in resolved.items()) + "。不要再就这些说法反问。）"
     messages = [{"role": "system", "content": build_system_prompt(cat)},
-                {"role": "user", "content": question}]
+                {"role": "user", "content": user_msg}]
     attempts: list[dict] = []
     last_mql = None
 
@@ -103,8 +126,18 @@ def answer_question(question: str, user_id: str, llm: LLM) -> Answer:
             feedback = f"你的输出不是合法 JSON 对象：{call.error}。请只输出一个 JSON 对象。"
         elif "cannot_answer" in call.parsed:
             return Answer("cannot_answer", message=str(call.parsed["cannot_answer"]), attempts=attempts)
+        elif "clarify" in call.parsed and "mql" not in call.parsed:
+            feedback = validate_clarify(call.parsed["clarify"], cat, resolved)
+            if feedback is None:
+                c = call.parsed["clarify"]
+                options = list(dict.fromkeys(c["options"]))
+                return Answer("clarify", clarify={"term": c["term"], "options": options},
+                              message=f'"{c["term"]}"有多个口径：{", ".join(options)}', attempts=attempts)
         elif "mql" not in call.parsed:
-            feedback = '输出必须是 {"mql": {...}} 或 {"cannot_answer": "..."}。'
+            feedback = '输出必须是 {"mql": {...}}、{"clarify": {...}} 或 {"cannot_answer": "..."}。'
+        elif resolved and (err := check_resolved_used(call.parsed["mql"], resolved)):
+            last_mql = call.parsed["mql"]
+            feedback = err
         else:
             last_mql = call.parsed["mql"]
             result = query_metrics(last_mql, user_id)

@@ -48,6 +48,7 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 | `adagent/nl2mql.py` | 自然语言 → MQL → 查询，带自修正（最多重试 2 次） |
 | `adagent/attribution/decompose.py` | 确定性归因：对数分解 + 广告组贡献度 + z 检验 |
 | `adagent/workflow.py` | LangGraph 工作流：路由 → 问数 / 归因 → 解释 → 提议 → 审批（interrupt）→ 执行；`run()` / `resume()` |
+| `adagent/clarify.py` | 歧义反问：校验反问的词和选项、映射用户回答、兜底文案 |
 | `adagent/actions.py` | 唯一的写动作：提议、幂等执行暂停、拒绝 |
 | `adagent/llm.py` | DeepSeek / 千问调用（OpenAI 兼容接口） |
 | `eval/` | 评测题、评分器、基线（Text-to-SQL）、运行器；`eval/ground_truth/events.json` 是事件真值，只给评测用 |
@@ -57,5 +58,6 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 
 - **M1 完成**：数据层、语义层、编译器、NL→MQL、Text-to-SQL 基线、40 道评测题（陷阱题和越权题已人工审核）。
 - **M2 进行中**：`decompose_roas`、LangGraph 归因工作流（`adagent/workflow.py`）和幂等审批执行（`adagent/actions.py`）已完成。checkpoint 存在 PostgreSQL 的 `graph` schema（`agent_graph` 角色）。
-- **下一步**：歧义反问（用 interrupt）、补齐 110 道评测题（含更难的口语化问法和 25 道归因题）、ReAct 归因基线、LLM judge 校准。
+- **歧义反问已完成**（2026-11-11，`adagent/clarify.py` + 工作流 `ask_clarify` / `apply_clarify` 节点，接口 `answer_clarification()`）。
+- **下一步**：补齐 110 道评测题（含更难的口语化问法和 25 道归因题）、ReAct 归因基线、LLM judge 校准。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点；归因相对 ReAct 基线的目标待补）。

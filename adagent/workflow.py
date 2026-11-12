@@ -1,6 +1,9 @@
 """归因与处置工作流（LangGraph）。
 
-    route ─┬─ query ─────────────────────────────────────────────────→ END
+    route ─┬─ query ─┬───────────────────────────────────────────────→ END
+           │         └─(多口径)→ ask_clarify ⏸ ─→ apply_clarify ─┬─(确定)→ query
+           │                        ↑                           ├─(没对上，再问)┘
+           │                        └───────────────────────────┘└─(问满 2 次)→ END
            ├─ attribute ─→ explain ─┬─(不需审批)──────────────────────→ END
            │                        └─ create_proposal ─→ approve ⏸ ─→ execute ─→ END
            └─ cannot_answer ───────────────────────────────────────────→ END
@@ -8,6 +11,8 @@
 要点：
   - create_proposal 和 approve 分成两个节点。interrupt 恢复时所在节点会从头重跑，
     approve 里只有 interrupt，没有副作用；pending 记录在前一个节点写，checkpoint 之后不会再执行。
+  - 反问同理：query 里调 LLM（生成 MQL + 判断歧义），ask_clarify 里只有 interrupt。
+    否则恢复时会重新调用模型，结果可能变（甚至换了一组选项），用户的回答就对不上了。
   - 审批人权限、拒绝理由在 resume() 里、恢复图之前检查；不合法的审批请求不会改变任何状态。
   - 暂停广告组只执行一次靠 actions.py 的幂等键 + 原子条件更新，不靠 LangGraph。
   - 计算交给 decompose_roas，LLM 只负责理解问题（route）和写解释（explain）。
@@ -29,7 +34,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from psycopg.rows import dict_row
 
-from . import actions
+from . import actions, clarify
 from .attribution.decompose import Window, decompose_roas
 from .db import reader_conn
 from .llm import LLM
@@ -45,8 +50,12 @@ class State(TypedDict, total=False):
     user_id: str
     thread_id: str
     plan: dict                 # route 的输出
-    status: str                # answered | refused | cannot_answer | failed | awaiting_approval | done
+    status: str                # answered | refused | cannot_answer | failed | unresolved
+                               # | awaiting_clarification | awaiting_approval | done
     answer: dict               # 问数结果
+    resolved_terms: dict       # 反问中用户确认的口径，如 {"销售额": "net_sales"}
+    clarify: dict              # 待反问：{"term", "options", "asks"}，asks = 已经问过几次
+    clarify_reply: str         # 用户对反问的回答（按钮值或自由文本）
     attribution: dict          # decompose_roas 的结果
     conclusion: dict           # 结构化结论（评测用）：main_cause / ad_group_id / suggest_pause / significant
     explanation: str
@@ -111,10 +120,39 @@ def build_graph(llm: LLM, checkpointer) -> Any:
         return {"attribution": "attribute", "cannot_answer": "cannot_answer"}.get(state["plan"].get("intent"), "query")
 
     def query(state: State) -> State:
-        a = answer_question(state["question"], state["user_id"], llm)
+        a = answer_question(state["question"], state["user_id"], llm, state.get("resolved_terms"))
+        if a.status == "clarify":
+            return {"status": "awaiting_clarification", "message": a.message,
+                    "clarify": {**a.clarify, "asks": 0}}
         status = {"rows": "answered"}.get(a.status, a.status)
         return {"status": status, "message": a.message,
                 "answer": _jsonable({"rows": a.rows, "mql": a.mql, "notes": a.notes})}
+
+    def after_query(state: State) -> str:
+        return "ask_clarify" if state["status"] == "awaiting_clarification" else END
+
+    def ask_clarify(state: State) -> State:
+        # 只做 interrupt，没有任何副作用：恢复时本节点会从头重跑
+        c = state["clarify"]
+        reply = interrupt(clarify.ask_payload(c["term"], c["options"], c["asks"], cat))
+        return {"clarify_reply": reply}
+
+    def apply_clarify(state: State) -> State:
+        c = state["clarify"]
+        metric = clarify.map_reply(state.get("clarify_reply", ""), c["term"], c["options"], cat, llm)
+        if metric:
+            return {"resolved_terms": {**state.get("resolved_terms", {}), c["term"]: metric},
+                    "clarify": {}, "status": "clarified"}
+        asks = c["asks"] + 1
+        if asks < clarify.MAX_ASKS:
+            return {"clarify": {**c, "asks": asks}}
+        return {"clarify": {**c, "asks": asks}, "status": "unresolved",
+                "message": clarify.unresolved_message(c["term"], c["options"], cat)}
+
+    def after_apply_clarify(state: State) -> str:
+        if state["status"] == "clarified":
+            return "query"
+        return END if state["status"] == "unresolved" else "ask_clarify"
 
     def cannot_answer(state: State) -> State:
         return {"status": "cannot_answer", "message": state["plan"].get("reason", "")}
@@ -194,17 +232,21 @@ def build_graph(llm: LLM, checkpointer) -> Any:
         return {"execution": res, "status": "done"}
 
     g = StateGraph(State)
-    for name, fn in [("route", route), ("query", query), ("cannot_answer", cannot_answer), ("attribute", attribute),
+    for name, fn in [("route", route), ("query", query), ("ask_clarify", ask_clarify), ("apply_clarify", apply_clarify),
+                     ("cannot_answer", cannot_answer), ("attribute", attribute),
                      ("explain", explain), ("create_proposal", create_proposal), ("approve", approve),
                      ("execute", execute)]:
         g.add_node(name, fn)
     g.add_edge(START, "route")
     g.add_conditional_edges("route", after_route, ["query", "attribute", "cannot_answer"])
+    g.add_conditional_edges("query", after_query, ["ask_clarify", END])
+    g.add_edge("ask_clarify", "apply_clarify")
+    g.add_conditional_edges("apply_clarify", after_apply_clarify, ["query", "ask_clarify", END])
     g.add_conditional_edges("attribute", after_attribute, ["explain", END])
     g.add_conditional_edges("explain", after_explain, ["create_proposal", END])
     g.add_edge("create_proposal", "approve")
     g.add_edge("approve", "execute")
-    for n in ("query", "cannot_answer", "execute"):
+    for n in ("cannot_answer", "execute"):
         g.add_edge(n, END)
     return g.compile(checkpointer=checkpointer)
 
@@ -223,15 +265,25 @@ def open_checkpointer() -> PostgresSaver:
 
 def _result(graph, config: dict, out: dict) -> dict:
     snapshot = graph.get_state(config)
-    pending = [i.value for t in snapshot.tasks for i in t.interrupts]
+    pending = {t.name: i.value for t in snapshot.tasks for i in t.interrupts}
     return {"thread_id": config["configurable"]["thread_id"], "state": dict(snapshot.values),
-            "pending_approval": pending[0] if pending else None}
+            "pending_approval": pending.get("approve"), "pending_clarification": pending.get("ask_clarify")}
 
 
 def run(question: str, user_id: str, graph) -> dict:
     thread_id = uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
     out = graph.invoke({"question": question, "user_id": user_id, "thread_id": thread_id}, config)
+    return _result(graph, config, out)
+
+
+def answer_clarification(thread_id: str, reply: str, graph) -> dict:
+    """反问的回答接口。reply 是按钮值（指标名）或用户输入的自由文本。"""
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = graph.get_state(config)
+    if not snapshot.next or "ask_clarify" not in snapshot.next:
+        return {**_result(graph, config, {}), "already_processed": True}
+    out = graph.invoke(Command(resume=reply), config)
     return _result(graph, config, out)
 
 

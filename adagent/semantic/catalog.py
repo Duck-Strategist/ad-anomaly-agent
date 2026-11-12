@@ -38,6 +38,11 @@ class Catalog:
     def dimensions(self) -> dict:
         return self.raw["dimensions"]
 
+    @property
+    def ambiguous_terms(self) -> dict[str, list[str]]:
+        """多口径说法 → 候选指标，例如 "销售额" → [gross_sales, net_sales, ad_sales]。"""
+        return self.raw["ambiguous_terms"]
+
     def measures_of(self, metric: str) -> list[str]:
         """公式里引用到的基础度量，例如 roas → [ad_sales, ad_spend]。"""
         return [t for t in _IDENT.findall(self.metrics[metric]["formula"]) if t in self.measures]
