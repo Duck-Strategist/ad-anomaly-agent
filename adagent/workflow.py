@@ -187,10 +187,13 @@ def build_graph(llm: LLM, checkpointer) -> Any:
 
     def explain(state: State) -> State:
         r = state["attribution"]
-        d = r.get("decomposition", {})
+        drilldown = r.get("found_by") == "drilldown"
+        # 下钻发现时，店铺整体的分解没有意义（不显著），给模型看的是定位到的广告组自己的分解
+        d = r.get("located_decomposition", {}) if drilldown else r.get("decomposition", {})
         summary = {
             "scope": r["scope"], "target": r["target"], "window": r["window"], "previous_window": r["previous_window"],
             "significant": r["significant"],
+            "analysis_level": f"广告组 {r.get('located_ad_group')}（店铺整体不显著，下钻发现）" if drilldown else r["scope"],
             "net_roas": {k: round(v, 3) for k, v in d.get("net_roas", {}).items()},
             "net_roas_change_pct": round(d["total_change_pct"], 1) if d else None,
             # 不给"占比"（下滑时占比的正负号容易被读反），给"该因子单独使净 ROAS 变化了多少"，并标明方向

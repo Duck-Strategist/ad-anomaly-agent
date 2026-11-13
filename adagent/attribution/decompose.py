@@ -7,6 +7,8 @@
 第二层（定位广告组，仅 scope=shop）：按花费加权的贡献度，Σ 贡献 = Δnet_roas（精确）
     贡献_i = [(本期净销售_i − 上期R × 本期花费_i) − (上期净销售_i − 上期R × 上期花费_i)] / 本期总花费
 
+下钻（scope=shop 且店铺整体不显著时）：逐个检验该店铺的广告组，门槛按 Bonferroni 校正（见 scan_threshold）。
+
 数据全部经 query_metrics 获取，所以权限照常由编译器注入。
 """
 
@@ -15,6 +17,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date, timedelta
+from statistics import NormalDist
 
 from ..semantic.executor import query_metrics
 
@@ -95,12 +98,22 @@ def z_score(total_log_change: float, orders_prev: float, orders_cur: float) -> f
     return total_log_change / math.sqrt(1 / orders_cur + 1 / orders_prev)
 
 
-def judge(decomp: dict, orders_prev: float, orders_cur: float) -> dict:
+def scan_threshold(n: int) -> float:
+    """一次检验 n 个广告组时的单组门槛（Bonferroni 校正，2026-11-13，SPEC 第七节"店铺不显著时下钻"）。
+
+    单组门槛 z ≤ −3 对应单侧误报率 p = Φ(−3) ≈ 0.135%。扫描 n 个组时"至少误报一个"的概率约为 n·p，
+    所以每个组的误报率收紧为 p/n：n = 10 → z ≤ −3.64。由公式得出，不按数据挑。"""
+    if n <= 1:
+        return Z_THRESHOLD
+    return -NormalDist().inv_cdf(NormalDist().cdf(-Z_THRESHOLD) / n)
+
+
+def judge(decomp: dict, orders_prev: float, orders_cur: float, z_threshold: float = Z_THRESHOLD) -> dict:
     """主因 / 次要因判定。只在下滑显著时归因。"""
     total = decomp["total_log_change"]
     z = z_score(total, orders_prev, orders_cur)
     base = {"z": z}
-    if z is None or z > -Z_THRESHOLD or total > -MIN_EFFECT:
+    if z is None or z > -z_threshold or total > -MIN_EFFECT:
         return {**base, "significant": False, "main_cause": None, "secondary_causes": []}
     neg = sorted(((k, v["log_contrib"]) for k, v in decomp["factors"].items() if v["log_contrib"] < 0),
                  key=lambda kv: kv[1])
@@ -176,6 +189,35 @@ def decompose_roas(scope: str, target: str, window: Window, user_id: str) -> dic
                       "note": "定位到的广告组自身变化未达显著，主因判断置信度较低"}
             result["located_decomposition"] = {**gd, **gj}
             located_judgement = gj
+        result["found_by"] = "shop"
+
+    elif scope == "shop":
+        # 店铺整体不显著：下钻检查每个广告组（"大盘看不出、下钻才发现"）。门槛按扫描的组数校正，防止多重比较带来的误报
+        rows = _query({"metrics": METRICS, "dimensions": ["ad_group"], "filters": flt, "time": _time(window)}, user_id)
+        threshold = scan_threshold(len(rows))
+        findings = []
+        for g in rows:
+            gp, gc = _split(g, METRICS)
+            gd = log_decompose(gp, gc)
+            if gd is None:
+                continue
+            gj = judge(gd, _f(gp["ad_orders"]), _f(gc["ad_orders"]), z_threshold=threshold)
+            if gj["significant"]:
+                findings.append((g["ad_group"], gd, gj))
+        findings.sort(key=lambda f: f[2]["z"])
+        result["drilldown"] = {"groups_scanned": len(rows), "z_threshold": threshold,
+                               "findings": [{"ad_group": a, "z": j["z"], "main_cause": j["main_cause"]}
+                                            for a, _, j in findings]}
+        if findings:
+            located, gd, gj = findings[0]
+            result["shop_significant"] = False
+            result["significant"] = True
+            result["found_by"] = "drilldown"
+            result["located_decomposition"] = {**gd, **gj}
+            located_judgement = gj
+            others = [a for a, _, _ in findings[1:]]
+            result["note"] = (f"店铺整体变化不显著（z={result['z']:.2f}），下钻发现广告组 {located} 显著下滑"
+                              + (f"；另有 {', '.join(others)} 也显著下滑" if others else ""))
 
     if result["significant"]:
         cause = located_judgement["main_cause"]

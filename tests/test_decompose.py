@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from adagent.attribution.decompose import (Window, decompose_roas, group_contributions, judge,
+from adagent.attribution.decompose import (Window, decompose_roas, group_contributions, judge, scan_threshold,
                                            log_decompose)
 
 TRUTH = json.loads((Path(__file__).resolve().parent.parent / "eval" / "ground_truth" / "events.json")
@@ -77,17 +77,23 @@ def test_event_at_ad_group_level(e):
 
 # ---------- 店铺层面：记录哪些事件能从大盘发现 ----------
 
-SHOP_LEVEL_DETECTABLE = {"E1", "E6"}   # 见 SPEC：其余事件在店铺层面接近噪声，要按广告组提问
+SHOP_LEVEL_DETECTABLE = {"E1", "E6"}   # 店铺整体显著；其余事件在店铺层面接近噪声，靠下钻发现（SPEC 第七节）
 
 
-@pytest.mark.parametrize("e", [e for e in TRUTH if e["event_id"] in SHOP_LEVEL_DETECTABLE],
-                         ids=lambda e: e["event_id"])
+@pytest.mark.parametrize("e", TRUTH, ids=lambda e: e["event_id"])
 def test_event_at_shop_level_locates_ad_group(e):
     r = decompose_roas("shop", e["shop_id"], window_of(e), "u_admin")
     assert r["significant"], r.get("z")
+    assert r["found_by"] == ("shop" if e["event_id"] in SHOP_LEVEL_DETECTABLE else "drilldown")
     assert r["located_ad_group"] == e["ad_group_id"]
     assert r["located_main_cause"] == e["main_cause"]
     assert r["recommendation"]["requires_approval"] == e["suggest_pause"]
+
+
+def test_scan_threshold_is_bonferroni():
+    assert scan_threshold(1) == 3.0
+    assert abs(scan_threshold(10) - 3.64) < 0.01      # 单组误报率 Φ(−3)/10
+    assert scan_threshold(30) > scan_threshold(10)    # 扫得越多，单组门槛越严
 
 
 # ---------- 误报：没有事件的周不应报显著下滑 ----------
@@ -103,6 +109,8 @@ def non_event_weeks(shop):
 
 @pytest.mark.parametrize("shop", ["US", "UK", "JP"])
 def test_no_false_alarm_at_shop_level(shop):
+    """包括下钻：没有事件的周，店铺整体和下钻都不应报显著下滑。
+    US 08-24 周里 US-AG06 有一个 z = −3.46 的随机下滑，单组门槛（−3）会误报，校正后的扫描门槛（−3.64）不会。"""
     hits = [w for w in non_event_weeks(shop) if decompose_roas("shop", shop, w, "u_admin")["significant"]]
     assert hits == []
 
