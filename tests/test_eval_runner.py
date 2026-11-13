@@ -170,6 +170,57 @@ def test_no_data_is_not_no_decline(saver):
     assert run0["status"] == "cannot_answer" and run0["conclusion"]["insufficient_data"]
 
 
+# ---------------- ReAct 基线 ----------------
+
+class ReactScript:
+    """按顺序返回 ReAct 每一步的输出。"""
+
+    def __init__(self, outputs):
+        self.outputs, self.calls = list(outputs), []
+
+    def chat_json(self, messages):
+        out = self.outputs.pop(0)
+        text = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+        # 存一份快照：analyze 会在同一个列表上继续追加消息
+        call = LLMCall("fake", list(messages), text, 0, 0, 0.0, parsed=None if isinstance(out, str) else out,
+                       error="invalid JSON output" if isinstance(out, str) else None)
+        self.calls.append(call)
+        return call
+
+
+FINAL_OK = {"action": "final", "significant": True, "main_cause": "ad_aov", "ad_group_id": "JP-AG08",
+            "suggest_pause": False, "explanation": "x"}
+QUERY = {"action": "query", "thought": "t", "mql": {"metrics": ["net_roas"], "filters": {"ad_group": ["JP-AG08"]},
+                                                     "time": {"range": "custom", "start": "2026-10-19", "end": "2026-10-25",
+                                                              "compare": "previous_period"}}}
+
+
+def test_react_query_then_final():
+    from eval.baseline_react import analyze
+    llm = ReactScript([QUERY, "not json", FINAL_OK])
+    a = analyze(Q_ATT["question"], "u_admin", llm)
+    assert a["status"] == "answered" and a["queries"] == 1
+    assert score_conclusion(Q_ATT["expect_conclusion"], a["conclusion"])[0]
+    tool_msg = llm.calls[1].messages[-1]["content"]
+    assert tool_msg.startswith("查询结果：") and "net_roas_prev" in tool_msg   # 工具结果回传给了模型
+
+
+def test_react_step_limit_forces_final():
+    from eval.baseline_react import MAX_STEPS, analyze
+    llm = ReactScript([QUERY] * (MAX_STEPS + 1) + [FINAL_OK])
+    a = analyze(Q_ATT["question"], "u_admin", llm)
+    assert a["queries"] == MAX_STEPS and a["status"] == "answered"
+    assert "不能再查了" in llm.calls[-1].messages[-1]["content"]
+
+
+def test_react_permission_still_enforced():
+    from eval.baseline_react import analyze
+    q = {**QUERY, "mql": {**QUERY["mql"], "filters": {"shop": ["JP"]}}}
+    llm = ReactScript([q, {**FINAL_OK, "significant": False}])
+    analyze("日本店那周怎么了", "u_ops_us", llm)
+    assert '"error_type": "permission"' in llm.calls[1].messages[-1]["content"]
+
+
 def test_score_conclusion_only_checks_given_fields():
     assert score_conclusion({"significant": False}, {"significant": False, "main_cause": None})[0]
     assert not score_conclusion({"significant": False}, {"significant": True, "main_cause": "cvr"})[0]

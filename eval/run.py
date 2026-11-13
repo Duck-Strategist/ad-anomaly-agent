@@ -27,7 +27,8 @@ from eval.baseline_text2sql import answer_question as baseline
 from adagent.workflow import build_graph, open_checkpointer
 from eval.check_reference import load_golds, load_questions
 from eval.scoring import compare_any
-from eval.workflow_eval import run_ambiguity, run_attribution
+from eval.baseline_react import analyze as react_analyze
+from eval.workflow_eval import run_ambiguity, run_attribution, run_attribution_baseline
 
 ROOT = Path(__file__).resolve().parent
 SYSTEMS = {"ours": ours, "baseline": baseline}
@@ -69,8 +70,12 @@ def run_workflow_one(q: dict, system: str, model: str) -> dict:
             "question": q["question"], "expect": q["expect"]}
 
     if system == "baseline":
-        if q["category"] == "attribution":
-            raise NotImplementedError("ReAct 归因基线尚未实现")
+        if q["category"] == "attribution":   # 归因的基线是 ReAct 自由循环（eval/baseline_react.py）
+            try:
+                res = run_attribution_baseline(q, lambda question, user: react_analyze(question, user, llm))
+            except Exception as e:
+                res = {"pass": False, "reason": f"exception: {type(e).__name__}: {e}"}
+            return {**base, **res, "first_try": res["pass"], **_usage(llm)}
         # Text-to-SQL 基线不会反问。该问题上 pass 的含义是"静默猜中了卖家真正要的口径"（只作参照，SPEC 第九节）
         try:
             a = baseline(q["question"], q["user_id"], llm)

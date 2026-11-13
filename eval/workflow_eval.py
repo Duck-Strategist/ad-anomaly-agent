@@ -86,6 +86,20 @@ def score_conclusion(expected: dict, got: dict | None) -> tuple[bool, str]:
     return (not wrong), ("match" if not wrong else "; ".join(wrong))
 
 
+def run_attribution_baseline(q: dict, analyze: Callable[[str, str], dict], runs: int = ATTRIBUTION_RUNS) -> dict:
+    """ReAct 基线跑 runs 次，判分与本方案相同（score_conclusion）。analyze(question, user_id) → {status, conclusion, ...}"""
+    results = []
+    for _ in range(runs):
+        a = analyze(q["question"], q["user_id"])
+        ok, why = score_conclusion(q["expect_conclusion"], a["conclusion"])
+        results.append({"pass": ok, "reason": why, "status": a["status"], "conclusion": a["conclusion"],
+                        "explanation": a["explanation"], "queries": a["queries"], "steps": a["steps"]})
+    n_pass = sum(x["pass"] for x in results)
+    return {"pass": n_pass == runs, "runs_passed": n_pass, "runs": results,
+            "reason": f"{n_pass}/{runs} runs correct" + ("" if n_pass == runs else
+                                                         f"; first failure: {next(x['reason'] for x in results if not x['pass'])}")}
+
+
 def run_attribution(q: dict, graph_factory: Callable[[], object], runs: int = ATTRIBUTION_RUNS) -> dict:
     """同一题独立跑 runs 次（每次新的 thread）。pass^k：k 次全对；另报单次平均准确率。"""
     results = []
