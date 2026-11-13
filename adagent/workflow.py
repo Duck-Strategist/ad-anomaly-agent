@@ -264,7 +264,6 @@ def build_graph(llm: LLM, checkpointer) -> Any:
         return {"proposal": {**p, "action": actions.ACTION, "ad_group_id": ag}}
 
     def approve(state: State) -> State:
-            "analysis_level": f"广告组 {r.get('located_ad_group')}（店铺整体不显著，下钻发现）" if drilldown else r["scope"],
         # 只做 interrupt，没有任何副作用：恢复时本节点会从头重跑
         decision = interrupt({"proposal": state["proposal"], "explanation": state.get("explanation", "")})
         return {"decision": decision}
