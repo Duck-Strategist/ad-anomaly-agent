@@ -14,19 +14,24 @@ MAX_ASKS = 2   # 同一个词最多问 2 次（第二次明确列出选项），
 
 
 def validate_clarify(clarify: object, cat: Catalog, resolved: dict[str, str]) -> str | None:
-    """校验模型输出的 {"term", "options"}。合法返回 None，否则返回回传给模型的错误说明。"""
+    """校验模型输出的 {"term"}。合法返回 None，否则返回回传给模型的错误说明。
+
+    选项不由模型给（2026-11-13 修改，见 options_for）：原来让模型"只列说得通的候选"，首轮评测里模型把卖家要的
+    "广告带来的销售额"删掉了，卖家回答后映射不上、再问一次也没有这个选项，无路可选。"""
     terms = cat.ambiguous_terms
     if not isinstance(clarify, dict):
-        return 'clarify 必须是对象：{"term": "...", "options": ["指标名", ...]}'
-    term, options = clarify.get("term"), clarify.get("options")
+        return 'clarify 必须是对象：{"term": "..."}'
+    term = clarify.get("term")
     if term not in terms:
         return f"clarify.term 只能是以下说法之一：{', '.join(terms)}；其他情况不要反问。"
     if term in resolved:
         return f'用户已经确认"{term}"指 {resolved[term]}，不要再反问，请直接按这个口径输出 MQL。'
-    if (not isinstance(options, list) or len(set(options)) < 2
-            or any(o not in terms[term] for o in options)):
-        return f'"{term}"的 options 必须是 {terms[term]} 中的至少 2 个。'
     return None
+
+
+def options_for(term: str, cat: Catalog) -> list[str]:
+    """反问的选项 = 该说法在 catalog 里的全部候选口径，由代码给出，模型不能删减。"""
+    return list(cat.ambiguous_terms[term])
 
 
 def check_resolved_used(mql: dict, resolved: dict[str, str]) -> str | None:

@@ -51,16 +51,21 @@ def saver():
 # ---------------- 校验（不需要数据库） ----------------
 
 @pytest.mark.parametrize("c, ok", [
-    ({"term": "销售额", "options": ["gross_sales", "net_sales"]}, True),
-    ({"term": "销售额", "options": ["gross_sales", "profit"]}, False),      # 目录外的指标
-    ({"term": "销售额", "options": ["gross_sales"]}, False),                # 少于 2 个
-    ({"term": "销售额", "options": ["gross_sales", "gross_sales"]}, False), # 重复不算 2 个
-    ({"term": "销售额", "options": ["roas", "net_roas"]}, False),           # 别的词的候选
-    ({"term": "利润", "options": ["gross_sales", "net_sales"]}, False),     # 不在 ambiguous_terms
+    ({"term": "销售额"}, True),
+    ({"term": "ROI"}, True),
+    ({"term": "利润"}, False),      # 不在 ambiguous_terms
+    ({}, False),
     ("销售额", False),
 ])
 def test_validate_clarify(c, ok):
     assert (validate_clarify(c, CAT, {}) is None) == ok
+
+
+def test_options_come_from_catalog_not_model(saver):
+    """2026-11-13：模型给的选项一律不用。首轮评测里模型把卖家要的口径删掉了，卖家无路可选。"""
+    llm = ScriptLLM([{"clarify": {"term": "销售额", "options": ["gross_sales", "net_sales"]}}])
+    r = run(Q, "u_admin", build_graph(llm, saver))
+    assert [o["metric"] for o in r["pending_clarification"]["options"]] == ["gross_sales", "net_sales", "ad_sales"]
 
 
 def test_cannot_reask_resolved_term():

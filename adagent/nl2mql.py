@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from .clarify import check_resolved_used, validate_clarify
+from .clarify import check_resolved_used, options_for, validate_clarify
 from .llm import LLM
 from .semantic.catalog import Catalog, load_catalog
 from .semantic.executor import query_metrics
@@ -70,12 +70,12 @@ def build_system_prompt(cat: Catalog) -> str:
 {amb_lines}
 只有当问题里用了这些说法、并且上下文没有任何信息能确定是哪个指标时，才反问用户，不要猜。
 如果问题里有能确定口径的限定（例如"广告销售额"就是 ad_sales），或者直接说了具体指标名（如 ROAS、ACOS），不要反问，直接输出 MQL。
-反问时 options 只列出在这个问题里确实说得通的候选（至少 2 个）。
+反问时只需给出说法原文，候选选项由系统给出。
 
 ## 输出
 只输出一个 JSON 对象：
 - 能回答：{{"mql": {{...}}}}
-- 需要反问口径：{{"clarify": {{"term": "说法原文，必须是上面列出的说法之一", "options": ["指标名", ...]}}}}
+- 需要反问口径：{{"clarify": {{"term": "说法原文，必须是上面列出的说法之一"}}}}
 - 问题与经营数据无关或指标不存在：{{"cannot_answer": "原因"}}
 
 ## 示例
@@ -130,7 +130,7 @@ def answer_question(question: str, user_id: str, llm: LLM, resolved_terms: dict[
             feedback = validate_clarify(call.parsed["clarify"], cat, resolved)
             if feedback is None:
                 c = call.parsed["clarify"]
-                options = list(dict.fromkeys(c["options"]))
+                options = options_for(c["term"], cat)   # 选项由代码给全，不用模型给的
                 return Answer("clarify", clarify={"term": c["term"], "options": options},
                               message=f'"{c["term"]}"有多个口径：{", ".join(options)}', attempts=attempts)
         elif "mql" not in call.parsed:
