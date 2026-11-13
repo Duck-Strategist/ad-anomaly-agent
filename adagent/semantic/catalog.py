@@ -23,6 +23,10 @@ class Catalog:
         return self.raw["today"]
 
     @property
+    def data_start(self) -> date:
+        return self.raw["data_start"]
+
+    @property
     def refund_settle_days(self) -> int:
         return self.raw["refund_settle_days"]
 

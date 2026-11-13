@@ -166,7 +166,9 @@ def decompose_roas(scope: str, target: str, window: Window, user_id: str) -> dic
               "window": [window.start.isoformat(), window.end.isoformat()],
               "previous_window": [window.previous.start.isoformat(), window.previous.end.isoformat()]}
     if decomp is None:
-        return {**result, "significant": False, "main_cause": None, "note": "本期或上期数据为零，无法分解"}
+        # insufficient_data：调用方必须把它和"无显著下滑"区分开（2026-11-13）
+        return {**result, "significant": False, "insufficient_data": True, "main_cause": None,
+                "note": "本期或上期数据为零，无法分解"}
     result |= {"decomposition": decomp, **judge(decomp, _f(prev["ad_orders"]), _f(cur["ad_orders"]))}
 
     located = target if scope == "ad_group" else None

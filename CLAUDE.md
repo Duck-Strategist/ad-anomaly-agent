@@ -54,11 +54,13 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 | `eval/` | 评测题、评分器、基线（Text-to-SQL）、运行器；`eval/ground_truth/events.json` 是事件真值，只给评测用 |
 | `tests/` | 权限、编译器、评分器、分解算法的测试 |
 
-## 当前进度（2026-11-12）
+## 当前进度（2026-11-13）
 
 - **M1 完成**：数据层、语义层、编译器、NL→MQL、Text-to-SQL 基线、40 道评测题（陷阱题和越权题已人工审核）。
 - **M2 进行中**：`decompose_roas`、LangGraph 归因工作流（`adagent/workflow.py`）和幂等审批执行（`adagent/actions.py`）已完成。checkpoint 存在 PostgreSQL 的 `graph` schema（`agent_graph` 角色）。
 - **歧义反问已完成**（2026-11-11，`adagent/clarify.py` + 工作流 `ask_clarify` / `apply_clarify` 节点，接口 `answer_clarification()`）。
 - **M2 查询题 36 道已完成并人工审核**（`eval/questions/m2_query.yaml`）：问法由 Gemini 按 `eval/question_brief.md` 生成（避免出题人接触系统 prompt），用户审核。`eval/crosscheck_csv.py` 用生成器 CSV 独立重算并检查陷阱是否考得出；评分器支持多个可接受的 gold（`gold_sql_alt` + `key_aliases`）。
-- **下一步**：10 道歧义题（问法同样交给第三方模型）、25 道归因题、运行器支持工作流类题目和 pass^3、ReAct 归因基线、LLM judge 校准。
+- **M2 评测题齐了（111 道）**：M1 40 + 查询 36 + 歧义 10（另有留出集 9）+ 归因 25。运行器 `eval/workflow_eval.py` 让歧义 / 归因题走完整工作流（歧义两步判分、归因每题 3 次算 pass^3），评测 thread_id 以 `eval-` 开头。实测数字见 RESULTS：歧义留出集 9/9，归因 pass^3 25/25（都在通用修复之后，修复前的数字也记录了）。
+- **归因**：店铺不显著时下钻（Bonferroni 校正门槛）；路由时间段由代码检查数据范围；"没有数据"不等于"没有下滑"（SPEC Q18）。
+- **下一步**：ReAct 归因基线（同模型 + `query_metrics` 工具自由多步，不给 `decompose_roas`）、Text-to-SQL 基线跑 M2 查询题、LLM judge 校准（解释分）、查询分支补时间范围检查。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点；归因相对 ReAct 基线的目标待补）。

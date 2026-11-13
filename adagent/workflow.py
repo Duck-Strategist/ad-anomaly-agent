@@ -113,10 +113,34 @@ EXPLAIN_PROMPT = """你是跨境电商广告分析师。下面是系统用确定
 def build_graph(llm: LLM, checkpointer) -> Any:
     cat = load_catalog()
 
+    def window_error(plan: dict) -> str | None:
+        """归因计划的时间段由代码检查（2026-11-13，SPEC Q18）：本期和自动取的上一期都要落在数据范围内。
+        首轮评测里路由偶尔把没写年份的"9月28日"解析成 2025 年，而 2025 年没有数据。"""
+        if plan.get("intent") != "attribution":
+            return None
+        try:
+            start, end = resolve_window(TimeSpec.model_validate(plan.get("time") or {"range": "last_7_days"}), cat.today)
+        except Exception as e:
+            return f"time 格式错误：{e}"
+        prev_start = Window(start, end).previous.start
+        if prev_start < cat.data_start or end > cat.today:
+            return (f"时间段 {start}~{end}（对比的上一期从 {prev_start} 开始）超出了数据范围 "
+                    f"{cat.data_start}~{cat.today}。今天是 {cat.today}；用户没写年份时按今年理解。")
+        return None
+
     def route(state: State) -> State:
-        call = llm.chat_json([{"role": "system", "content": ROUTE_PROMPT.format(today=cat.today)},
-                              {"role": "user", "content": state["question"]}])
+        messages = [{"role": "system", "content": ROUTE_PROMPT.format(today=cat.today)},
+                    {"role": "user", "content": state["question"]}]
+        call = llm.chat_json(messages)
         plan = call.parsed if not call.error else {"intent": "query"}
+        err = window_error(plan)
+        if err:   # 把错误回传给模型重试一次（同 nl2mql 的自修正）
+            messages += [{"role": "assistant", "content": call.output},
+                         {"role": "user", "content": f"{err} 请重新输出完整的 JSON。"}]
+            retry = llm.chat_json(messages)
+            plan = retry.parsed if not retry.error else plan
+            err = window_error(plan)
+            plan = {**plan, "route_retried": True} | ({"time_error": err} if err else {})
         return {"plan": plan}
 
     def after_route(state: State) -> str:
@@ -162,6 +186,9 @@ def build_graph(llm: LLM, checkpointer) -> Any:
 
     def attribute(state: State) -> State:
         p = state["plan"]
+        if p.get("time_error"):   # 重试后时间段仍超出数据范围：如实说没有数据，不做分析
+            return {"status": "cannot_answer", "message": f"没有这个时间段的数据：{p['time_error']}",
+                    "conclusion": {"significant": None, "insufficient_data": True}}
         scope, target = p.get("scope", "shop"), p.get("target", "")
         if scope == "sku":   # 1 组 1 SKU：SKU 换成对应的广告组
             with reader_conn() as conn:
@@ -176,6 +203,12 @@ def build_graph(llm: LLM, checkpointer) -> Any:
             return {"status": "refused", "message": "; ".join(e.args[0])}
         except Exception as e:  # 时间格式错误、目标不存在等：降级返回原因
             return {"status": "failed", "message": f"{type(e).__name__}: {e}"}
+        if result.get("insufficient_data"):
+            # "没有数据"不等于"没有下滑"：原来记成 significant=false，卖家看起来像"无显著下滑"，
+            # 评测里干扰题也会因此被误判为通过（2026-11-13）
+            return {"status": "cannot_answer", "attribution": _jsonable(result),
+                    "message": f"{result['target']} 在 {result['window'][0]}~{result['window'][1]} 或上一期没有足够数据，无法分析",
+                    "conclusion": {"significant": None, "insufficient_data": True}}
         rec = result.get("recommendation") or {}
         conclusion = {"significant": result["significant"], "main_cause": result.get("located_main_cause"),
                       "ad_group_id": result.get("located_ad_group"),
@@ -183,7 +216,9 @@ def build_graph(llm: LLM, checkpointer) -> Any:
         return {"attribution": _jsonable(result), "conclusion": conclusion}
 
     def after_attribute(state: State) -> str:
-        return "explain" if "attribution" in state else END
+        if "attribution" not in state or (state.get("conclusion") or {}).get("insufficient_data"):
+            return END
+        return "explain"
 
     def explain(state: State) -> State:
         r = state["attribution"]
@@ -229,6 +264,7 @@ def build_graph(llm: LLM, checkpointer) -> Any:
         return {"proposal": {**p, "action": actions.ACTION, "ad_group_id": ag}}
 
     def approve(state: State) -> State:
+            "analysis_level": f"广告组 {r.get('located_ad_group')}（店铺整体不显著，下钻发现）" if drilldown else r["scope"],
         # 只做 interrupt，没有任何副作用：恢复时本节点会从头重跑
         decision = interrupt({"proposal": state["proposal"], "explanation": state.get("explanation", "")})
         return {"decision": decision}

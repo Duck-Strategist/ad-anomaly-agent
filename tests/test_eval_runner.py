@@ -149,6 +149,27 @@ def test_eval_proposals_are_marked_and_not_executed(saver):
     assert admin("SELECT status FROM ad_groups WHERE ad_group_id = 'US-AG07'")[0][0] == "enabled"   # 没人审批，不执行
 
 
+def test_wrong_year_is_retried(saver):
+    """首轮评测：路由偶尔把"9月28日"写成 2025 年。代码检查时间段，回传错误重试一次。"""
+    wrong = {**JP_AG08, "time": {"range": "custom", "start": "2025-10-19", "end": "2025-10-25"}}
+    llm = ScriptLLM(plans=[wrong, JP_AG08])
+    r = run_attribution(Q_ATT, lambda: build_graph(llm, saver), runs=1)
+    assert r["pass"], r["reason"]
+    assert r["runs"][0]["plan"]["route_retried"]
+    route_calls = [c for c in llm.calls if "路由器" in c.messages[0]["content"]]
+    assert len(route_calls) == 2 and "超出了数据范围" in route_calls[1].messages[-1]["content"]
+
+
+def test_no_data_is_not_no_decline(saver):
+    """重试后仍然没有数据：如实说没有数据；结论不是 significant=false，干扰题不能因此判对。"""
+    wrong = {**JP_AG08, "time": {"range": "custom", "start": "2025-10-19", "end": "2025-10-25"}}
+    q = {**Q_ATT, "expect_conclusion": {"significant": False}}   # 干扰题的期望
+    r = run_attribution(q, lambda: build_graph(ScriptLLM(plans=[wrong]), saver), runs=1)
+    run0 = r["runs"][0]
+    assert not r["pass"]
+    assert run0["status"] == "cannot_answer" and run0["conclusion"]["insufficient_data"]
+
+
 def test_score_conclusion_only_checks_given_fields():
     assert score_conclusion({"significant": False}, {"significant": False, "main_cause": None})[0]
     assert not score_conclusion({"significant": False}, {"significant": True, "main_cause": "cvr"})[0]
