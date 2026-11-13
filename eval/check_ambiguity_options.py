@@ -4,11 +4,12 @@
 （2026-11-13 发现 AM05、AM08 的时间窗口太近，退款尚未发生，扣不扣退款结果几乎一样）。
 用编译器取数（各候选口径的 MQL 已经过 check_reference 核对），不调用模型。
 
-用法：uv run python -m eval.check_ambiguity_options
+用法：uv run python -m eval.check_ambiguity_options [题目文件]
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from adagent.semantic.catalog import load_catalog
@@ -22,7 +23,8 @@ ROOT = Path(__file__).resolve().parent
 def main() -> int:
     cat = load_catalog()
     weak = 0
-    for q in load_questions(ROOT / "questions" / "m2_ambiguity.yaml"):
+    path = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "questions" / "m2_ambiguity.yaml"
+    for q in load_questions(path):
         mql = q["reference_mql"]
         right = mql["metrics"][0]
         vals = {}

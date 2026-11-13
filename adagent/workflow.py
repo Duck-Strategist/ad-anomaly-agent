@@ -275,8 +275,9 @@ def _result(graph, config: dict, out: dict) -> dict:
             "pending_approval": pending.get("approve"), "pending_clarification": pending.get("ask_clarify")}
 
 
-def run(question: str, user_id: str, graph) -> dict:
-    thread_id = uuid.uuid4().hex
+def run(question: str, user_id: str, graph, thread_id: str | None = None) -> dict:
+    """thread_id 同时用作审计日志的 trace_id。评测传入 "eval-" 前缀的 id，产生的提议保留不删，按前缀排除。"""
+    thread_id = thread_id or uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
     out = graph.invoke({"question": question, "user_id": user_id, "thread_id": thread_id}, config)
     return _result(graph, config, out)
