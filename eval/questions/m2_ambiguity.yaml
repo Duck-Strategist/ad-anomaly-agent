@@ -1,0 +1,234 @@
+# M2 歧义题（10 道）：该问 5（AM01–AM05）、不该问 5（AM06–AM10）
+#
+# 来源：问法由 Gemini 按 eval/question_brief_ambiguity.md 生成（原始输出 eval/question_sources/gemini_2026-11-13_ambiguity.txt），
+#       Claude 按规则建议、用户确认选择。source 字段对应原始编号。
+#
+# 字段：
+#   expect: clarify     该问。判分分两步（见 question_brief_ambiguity.md）：
+#                         ① 反问了，问的词 = term，选项包含 required_options（用户最终选的口径 + 多数人默认的口径）
+#                         ② 用 reply（卖家原话，自由文本）作答后，结果与 gold_sql 一致
+#                       default_metric：不问时多数人默认的口径，用于统计 Text-to-SQL 基线"静默猜中"的比例（只作参照）
+#   expect: no_clarify  不该问。没有反问，且结果与 gold_sql 一致
+#   reference_mql：确定口径之后的 MQL，只用于核对 gold 和编译器
+#
+# 金额统一折合美元（广告侧按 stat_date 汇率，订单侧和退款按下单日汇率，SPEC Q16）。"今天" = 2026-11-08（周日）。
+# net_roas = 广告销售额 × (1 − 该 SKU 同期退款率) ÷ 广告花费（catalog.yaml）。
+#
+# 审核状态：AI 起草，待人工审核
+
+# ============================== 该问 ==============================
+- id: AM01
+  category: ambiguity
+  source: gemini A2
+  user_id: u_ops_us
+  question: 刚对账发现数字有点对不上，麻烦查下美国店US-SKU04上周（10月26日到11月1日）的销售额是多少美元？
+  expect: clarify
+  term: 销售额
+  required_options: [gross_sales, net_sales]
+  reply: 我要看实际落袋的，就是把买家退货退款那部分减掉之后的净销售额。
+  reply_metric: net_sales
+  default_metric: gross_sales
+  gold_sql: |
+    SELECT SUM(oi.qty * oi.unit_price
+               - (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id)) AS net_sales
+    FROM orders o JOIN order_items oi ON oi.order_id = o.order_id
+    WHERE oi.sku_id = 'US-SKU04' AND o.deleted_at IS NULL
+      AND (o.created_at AT TIME ZONE 'America/Los_Angeles')::date BETWEEN '2026-10-26' AND '2026-11-01'
+  reference_mql: {metrics: [net_sales], filters: {sku: [US-SKU04]}, time: {range: last_week}}
+
+- id: AM02
+  category: ambiguity
+  source: gemini A3
+  user_id: u_ops_uk
+  # 改写：原问"销售额是多少英镑"，去掉币种要求（第一版只支持折合美元，SPEC Q3）
+  question: "@助手 英国店昨天11月7号UK-SKU02的销售额是多少？急着填日报。"
+  expect: clarify
+  term: 销售额
+  required_options: [gross_sales, ad_sales]
+  reply: 填广告日报用的，只要后台广告报表里算到广告头上的那部分出单金额。
+  reply_metric: ad_sales
+  default_metric: gross_sales
+  gold_sql: |
+    SELECT SUM(s.ad_sales * fx.rate_to_usd) AS ad_sales
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = 'GBP'
+    WHERE g.sku_id = 'UK-SKU02' AND s.stat_date = '2026-11-07'
+  reference_mql: {metrics: [ad_sales], filters: {sku: [UK-SKU02]}, time: {range: custom, start: 2026-11-07, end: 2026-11-07}}
+
+- id: AM03
+  category: ambiguity
+  source: gemini A6
+  user_id: u_admin
+  question: 查一下英国店10月份整店的ROI是多少？
+  expect: clarify
+  term: ROI
+  required_options: [roas, tacos]
+  reply: 我想看广告费占全店总下单金额的比例，就是看整体广告费率高不高。
+  reply_metric: tacos
+  default_metric: roas
+  gold_sql: |
+    SELECT
+      (SELECT SUM(s.spend * fx.rate_to_usd)
+       FROM ad_daily_stats s
+       JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+       JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+       JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = 'GBP'
+       WHERE c.shop_id = 'UK' AND s.stat_date BETWEEN '2026-10-01' AND '2026-10-31')
+      /
+      (SELECT SUM(oi.qty * oi.unit_price * fx.rate_to_usd)
+       FROM orders o
+       JOIN order_items oi ON oi.order_id = o.order_id
+       JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = (o.created_at AT TIME ZONE 'Europe/London')::date
+       WHERE o.shop_id = 'UK' AND o.deleted_at IS NULL
+         AND (o.created_at AT TIME ZONE 'Europe/London')::date BETWEEN '2026-10-01' AND '2026-10-31') AS tacos
+  reference_mql: {metrics: [tacos], filters: {shop: [UK]}, time: {range: custom, start: 2026-10-01, end: 2026-10-31}}
+
+- id: AM04
+  category: ambiguity
+  source: gemini A7
+  user_id: u_ops_uk
+  question: 英国店UK-SKU09在8月11日到8月31日期间的ROI是多少？我复盘一下老品表现。
+  expect: clarify
+  term: ROI
+  required_options: [roas, net_roas]
+  reply: 8月的退货基本都退完了，你把退款扣掉之后再帮我算它的广告投产比。
+  reply_metric: net_roas
+  default_metric: roas
+  gold_sql: |
+    WITH ad AS (
+      SELECT SUM(s.ad_sales * fx.rate_to_usd) AS sales, SUM(s.spend * fx.rate_to_usd) AS spend
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = 'GBP'
+      WHERE g.sku_id = 'UK-SKU09' AND s.stat_date BETWEEN '2026-08-11' AND '2026-08-31'),
+    ord AS (
+      SELECT SUM(x.ref * x.rate) / SUM(x.amt * x.rate) AS refund_rate
+      FROM (SELECT oi.qty * oi.unit_price AS amt, fx.rate_to_usd AS rate,
+                   (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) AS ref
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.order_id
+            JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = (o.created_at AT TIME ZONE 'Europe/London')::date
+            WHERE oi.sku_id = 'UK-SKU09' AND o.deleted_at IS NULL
+              AND (o.created_at AT TIME ZONE 'Europe/London')::date BETWEEN '2026-08-11' AND '2026-08-31') x)
+    SELECT ad.sales * (1 - ord.refund_rate) / ad.spend AS net_roas FROM ad CROSS JOIN ord
+  reference_mql: {metrics: [net_roas], filters: {sku: [UK-SKU09]}, time: {range: custom, start: 2026-08-11, end: 2026-08-31}}
+
+- id: AM05
+  category: ambiguity
+  source: gemini A9
+  user_id: u_ops_us
+  # 改写：原问"11月1号到11月7号这七天"。这段的退款还没发生，ROAS 与扣退款后的 ROAS 只差 −0.4%（在容差内），
+  #   第 ② 步区分不出"把回答错映射成扣退款口径"。改为退款已基本入账的 10 月（−2.1%）
+  question: 麻烦看下美国店US-SKU01在10月份的广告效果是多少？
+  expect: clarify
+  term: 广告效果
+  required_options: [roas]   # 用户最终选的和多数人默认的都是 ROAS；"至少 2 个选项"由反问校验保证
+  reply: 直接看广告带来的销售额除以广告花费那个倍数，不用管自然单和退款。
+  reply_metric: roas
+  default_metric: roas
+  gold_sql: |
+    SELECT SUM(s.ad_sales) / SUM(s.spend) AS roas
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    WHERE g.sku_id = 'US-SKU01' AND s.stat_date BETWEEN '2026-10-01' AND '2026-10-31'
+  reference_mql: {metrics: [roas], filters: {sku: [US-SKU01]}, time: {range: custom, start: 2026-10-01, end: 2026-10-31}}
+
+# ============================== 不该问 ==============================
+- id: AM06
+  category: ambiguity
+  source: gemini B4
+  user_id: u_ops_us
+  question: 美国店US-SKU03上周（10月26日到11月1日）除了自然出单以外，广告后台归因出来的那部分销售额是多少美元？
+  expect: no_clarify
+  term: 销售额
+  gold_sql: |
+    SELECT SUM(s.ad_sales) AS ad_sales
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    WHERE g.sku_id = 'US-SKU03' AND s.stat_date BETWEEN '2026-10-26' AND '2026-11-01'
+  reference_mql: {metrics: [ad_sales], filters: {sku: [US-SKU03]}, time: {range: last_week}}
+
+- id: AM07
+  category: ambiguity
+  source: gemini B3
+  user_id: u_ops_uk
+  # 改写：原问"净销售额是多少英镑"，去掉币种要求（同 AM02）
+  question: 英国店UK-SKU08在9月份所有订单里，把买家退款全部减掉之后的净销售额是多少？
+  expect: no_clarify
+  term: 销售额
+  gold_sql: |
+    SELECT SUM((oi.qty * oi.unit_price
+                - (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id)) * fx.rate_to_usd) AS net_sales
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.order_id
+    JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = (o.created_at AT TIME ZONE 'Europe/London')::date
+    WHERE oi.sku_id = 'UK-SKU08' AND o.deleted_at IS NULL
+      AND (o.created_at AT TIME ZONE 'Europe/London')::date BETWEEN '2026-09-01' AND '2026-09-30'
+  reference_mql: {metrics: [net_sales], filters: {sku: [UK-SKU08]}, time: {range: custom, start: 2026-09-01, end: 2026-09-30}}
+
+- id: AM08
+  category: ambiguity
+  source: gemini B6
+  user_id: u_ops_uk
+  # 改写：原问"本周（11月2日到11月8日）"。本周的退款还没发生，ROAS 与扣退款后的 ROAS 完全相同（+0.0%），
+  #   "先不用扣退货"这个限定考不出来。改为 10 月（−1.6%）
+  question: 英国店广告组UK-AG04 10月份的ROI是多少？按直接出的广告单算，先不用扣退货。
+  expect: no_clarify
+  term: ROI
+  gold_sql: |
+    SELECT SUM(s.ad_sales * fx.rate_to_usd) / SUM(s.spend * fx.rate_to_usd) AS roas
+    FROM ad_daily_stats s
+    JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = 'GBP'
+    WHERE s.ad_group_id = 'UK-AG04' AND s.stat_date BETWEEN '2026-10-01' AND '2026-10-31'
+  reference_mql: {metrics: [roas], filters: {ad_group: [UK-AG04]}, time: {range: custom, start: 2026-10-01, end: 2026-10-31}}
+
+- id: AM09
+  category: ambiguity
+  source: gemini B8
+  user_id: u_admin
+  question: 老板娘在问日本店8月11日到11月8日这三个来月的整体广告效果，就是花掉的广告费占到全店下单总额的百分之多少，具体是多少？
+  expect: no_clarify
+  term: 广告效果
+  gold_sql: |
+    SELECT
+      (SELECT SUM(s.spend * fx.rate_to_usd)
+       FROM ad_daily_stats s
+       JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+       JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+       JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = 'JPY'
+       WHERE c.shop_id = 'JP' AND s.stat_date BETWEEN '2026-08-11' AND '2026-11-08')
+      /
+      (SELECT SUM(oi.qty * oi.unit_price * fx.rate_to_usd)
+       FROM orders o
+       JOIN order_items oi ON oi.order_id = o.order_id
+       JOIN fx_rates fx ON fx.currency = 'JPY' AND fx.rate_date = (o.created_at AT TIME ZONE 'Asia/Tokyo')::date
+       WHERE o.shop_id = 'JP' AND o.deleted_at IS NULL
+         AND (o.created_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN '2026-08-11' AND '2026-11-08') AS tacos
+  reference_mql: {metrics: [tacos], filters: {shop: [JP]}, time: {range: custom, start: 2026-08-11, end: 2026-11-08}}
+
+- id: AM10
+  category: ambiguity
+  source: gemini B10
+  user_id: u_admin
+  question: 日本店广告组JP-AG01在9月份的广告效果是多少？要算把后期退货退款减掉后的广告投入产出比。
+  expect: no_clarify
+  term: 广告效果
+  gold_sql: |
+    WITH ad AS (
+      SELECT SUM(s.ad_sales * fx.rate_to_usd) AS sales, SUM(s.spend * fx.rate_to_usd) AS spend
+      FROM ad_daily_stats s
+      JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = 'JPY'
+      WHERE s.ad_group_id = 'JP-AG01' AND s.stat_date BETWEEN '2026-09-01' AND '2026-09-30'),
+    ord AS (   -- 广告组推的 SKU 按外键 ad_groups.sku_id 取，不从编号推断
+      SELECT SUM(x.ref * x.rate) / SUM(x.amt * x.rate) AS refund_rate
+      FROM (SELECT oi.qty * oi.unit_price AS amt, fx.rate_to_usd AS rate,
+                   (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) AS ref
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.order_id
+            JOIN ad_groups g ON g.sku_id = oi.sku_id AND g.ad_group_id = 'JP-AG01'
+            JOIN fx_rates fx ON fx.currency = 'JPY' AND fx.rate_date = (o.created_at AT TIME ZONE 'Asia/Tokyo')::date
+            WHERE o.deleted_at IS NULL
+              AND (o.created_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN '2026-09-01' AND '2026-09-30') x)
+    SELECT ad.sales * (1 - ord.refund_rate) / ad.spend AS net_roas FROM ad CROSS JOIN ord
+  reference_mql: {metrics: [net_roas], filters: {ad_group: [JP-AG01]}, time: {range: custom, start: 2026-09-01, end: 2026-09-30}}
