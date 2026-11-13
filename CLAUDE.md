@@ -57,10 +57,12 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 ## 当前进度（2026-11-13）
 
 - **M1 完成**：数据层、语义层、编译器、NL→MQL、Text-to-SQL 基线、40 道评测题（陷阱题和越权题已人工审核）。
-- **M2 进行中**：`decompose_roas`、LangGraph 归因工作流（`adagent/workflow.py`）和幂等审批执行（`adagent/actions.py`）已完成。checkpoint 存在 PostgreSQL 的 `graph` schema（`agent_graph` 角色）。
+- **M2 完成（2026-11-13）**：全集正式评测数字见 RESULTS 顶部"M2 全集正式评测"一节（简历用这一节）。查询类本方案 / DeepSeek 93.9%（基线 98.5%，差在 4 道 MQL 表达不了的月度对比），首次即对 93.9% vs 69.7%；跨模型稳定性目标未达标（相差 7.5 个百分点）；归因 pass^3 25/25（ReAct 基线 14/25）。
+- M2 内容：`decompose_roas`、LangGraph 归因工作流（`adagent/workflow.py`）和幂等审批执行（`adagent/actions.py`）。checkpoint 存在 PostgreSQL 的 `graph` schema（`agent_graph` 角色）。
 - **歧义反问已完成**（2026-11-11，`adagent/clarify.py` + 工作流 `ask_clarify` / `apply_clarify` 节点，接口 `answer_clarification()`）。
 - **M2 查询题 36 道已完成并人工审核**（`eval/questions/m2_query.yaml`）：问法由 Gemini 按 `eval/question_brief.md` 生成（避免出题人接触系统 prompt），用户审核。`eval/crosscheck_csv.py` 用生成器 CSV 独立重算并检查陷阱是否考得出；评分器支持多个可接受的 gold（`gold_sql_alt` + `key_aliases`）。
 - **M2 评测题齐了（111 道）**：M1 40 + 查询 36 + 歧义 10（另有留出集 9）+ 归因 25。运行器 `eval/workflow_eval.py` 让歧义 / 归因题走完整工作流（歧义两步判分、归因每题 3 次算 pass^3），评测 thread_id 以 `eval-` 开头。实测数字见 RESULTS：歧义留出集 9/9，归因 pass^3 25/25（都在通用修复之后，修复前的数字也记录了）。
 - **归因**：店铺不显著时下钻（Bonferroni 校正门槛）；路由时间段由代码检查数据范围；"没有数据"不等于"没有下滑"（SPEC Q18）。
-- **下一步**：ReAct 归因基线（同模型 + `query_metrics` 工具自由多步，不给 `decompose_roas`）、Text-to-SQL 基线跑 M2 查询题、LLM judge 校准（解释分）、查询分支补时间范围检查。
-- 开放问题见 SPEC 第十节（Q14：第 4 天检查点；归因相对 ReAct 基线的目标待补）。
+- 评测工具：`eval/run.py`（查询 / 歧义 / 归因，含 ReAct 基线 `eval/baseline_react.py`）、`eval/summarize.py`（合并多次运行出表）、`eval/rescore.py`（修正 gold 后用已存结果重判，不重跑模型）。
+- **下一步（M3）**：查询分支补时间范围检查和相对时间的代码解析（跨模型稳定性未达标的主因）、MQL 支持自然月 / 指定两段时间对比、LLM judge 校准（解释分）、极简前端、Docker Compose、Langfuse、README / 演示脚本。
+- 开放问题见 SPEC 第十节（Q14：第 4 天检查点）。

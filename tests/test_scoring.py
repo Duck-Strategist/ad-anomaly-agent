@@ -56,12 +56,14 @@ M2 = {q["id"]: q for q in load_questions(Path(__file__).resolve().parent.parent 
 
 @pytest.mark.parametrize("qid", [k for k, q in M2.items() if q.get("gold_sql_alt")])
 def test_alt_gold_has_same_numbers_as_main_gold(qid):
-    """长表 gold 是另一条独立手写的 SQL：它和主 gold 的数值集合必须一致，否则两者之一写错了。"""
+    """同一组数字的另一种写法（kind: shape，默认）是独立手写的 SQL：数值集合必须和主 gold 一致，否则两者之一写错了。
+    kind: interpretation 是问题的另一种合理理解（如 S17"国庆那周"），数字本来就不同，不在此检查。"""
     def numbers(rows):
         return sorted(round(float(v), 6) for r in rows for v in r.values() if isinstance(v, (int, float, Decimal)))
     main = numbers(run_gold(M2[qid]["gold_sql"]))
     for alt in M2[qid]["gold_sql_alt"]:
-        assert numbers(run_gold(alt["sql"])) == main
+        if alt.get("kind", "shape") == "shape":
+            assert numbers(run_gold(alt["sql"])) == main
 
 
 # ---------- 陷阱题必须能区分对错 ----------

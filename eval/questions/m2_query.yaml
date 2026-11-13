@@ -91,6 +91,23 @@
     FROM l GROUP BY sku_id
     ORDER BY refund_rate DESC
     LIMIT 3
+  # 2026-11-13 全集评测分歧排查："国庆那周"有两种合理理解——包含 10-01 的自然周（9-28~10-04，主 gold）或
+  #   国庆黄金周（10-01~10-07）。审核时漏看了这个歧义；两种都接受（kind: interpretation，数字不同）
+  gold_sql_alt:
+    - kind: interpretation
+      sql: |
+        WITH l AS (
+          SELECT oi.sku_id, oi.qty * oi.unit_price AS amt, fx.rate_to_usd AS rate,
+                 (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) AS ref
+          FROM orders o
+          JOIN order_items oi ON oi.order_id = o.order_id
+          JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = (o.created_at AT TIME ZONE 'Europe/London')::date
+          WHERE o.shop_id = 'UK' AND o.deleted_at IS NULL
+            AND (o.created_at AT TIME ZONE 'Europe/London')::date BETWEEN '2026-10-01' AND '2026-10-07')
+        SELECT sku_id, SUM(ref * rate) / SUM(amt * rate) AS refund_rate
+        FROM l GROUP BY sku_id
+        ORDER BY refund_rate DESC
+        LIMIT 3
   reference_mql: {metrics: [refund_rate], dimensions: [sku], filters: {shop: [UK]}, time: {range: custom, start: 2026-09-28, end: 2026-10-04}, order_by: {metric: refund_rate, desc: true}, limit: 3}
 
 - id: S18
@@ -481,6 +498,18 @@
     JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = 'GBP'
     WHERE s.ad_group_id IN ('UK-AG02', 'UK-AG09') AND s.stat_date BETWEEN '2026-10-19' AND '2026-10-25'
     GROUP BY s.stat_date, s.ad_group_id
+  # 2026-11-13 全集评测分歧排查：DeepSeek 基线把两个组并排成宽表（每天一行），数字完全正确，原评分器因行数不同判错。
+  #   补一条宽表写法，同一组数字（kind: shape）
+  gold_sql_alt:
+    - kind: shape
+      sql: |
+        SELECT s.stat_date,
+               SUM(s.spend * fx.rate_to_usd) FILTER (WHERE s.ad_group_id = 'UK-AG02') AS uk_ag02_spend,
+               SUM(s.spend * fx.rate_to_usd) FILTER (WHERE s.ad_group_id = 'UK-AG09') AS uk_ag09_spend
+        FROM ad_daily_stats s
+        JOIN fx_rates fx ON fx.rate_date = s.stat_date AND fx.currency = 'GBP'
+        WHERE s.ad_group_id IN ('UK-AG02', 'UK-AG09') AND s.stat_date BETWEEN '2026-10-19' AND '2026-10-25'
+        GROUP BY s.stat_date
   reference_mql: {metrics: [ad_spend], dimensions: [date, ad_group], filters: {ad_group: [UK-AG02, UK-AG09]}, time: {range: custom, start: 2026-10-19, end: 2026-10-25}}
 
 - id: C20
