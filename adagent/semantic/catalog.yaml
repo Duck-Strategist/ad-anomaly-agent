@@ -18,7 +18,9 @@ dimensions:
   campaign: {sources: [ad],        desc: "广告活动"}
 
 # ---------- 基础度量：在对应一侧的子查询里聚合 ----------
-# money: true 表示金额，按行乘以当天汇率换算成报告币种后再求和
+# money: true 表示金额，按行乘以当天汇率换算成报告币种后再求和。
+#   "当天"：广告侧 = 报表日期（stat_date）；订单侧 = 订单的店铺本地下单日，**退款也用下单日汇率**
+#   （退款归属下单日，销售和退款用同一个换算标准，全额退款的订单净额恰好为 0；2026-11-12 确认，见 SPEC Q16）
 measures:
   ad_spend:      {source: ad,    agg: sum,            expr: "s.spend",                 money: true}
   impressions:   {source: ad,    agg: sum,            expr: "s.impressions"}

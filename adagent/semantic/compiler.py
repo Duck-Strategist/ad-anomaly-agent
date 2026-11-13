@@ -13,11 +13,13 @@
   - 订单按店铺本地日期切日（created_at 存的是 UTC）
   - 订单排除软删除；退款先按订单行聚合再 JOIN（一行可能有多笔退款）
   - 每个子查询都强制加 shop_id = ANY(%(allowed_shops)s)
+  - 过滤条件里的商品 / 广告组 / 广告活动编号，属于无权限店铺的直接拒绝，不存在的报错（见 check_id_filters）
   - 所有来自 MQL 的值都走参数绑定；拼进 SQL 的只有目录里预先写好的表达式
 """
 
 from __future__ import annotations
 
+import difflib
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -27,6 +29,53 @@ from .mql import MQL, MQLError, previous_window, resolve_window, validate_agains
 
 class PermissionDenied(MQLError):
     """请求了无权限的店铺。不应让模型重试，而应如实告诉用户。"""
+
+
+ID_FILTERS = ("sku", "ad_group", "campaign")
+
+
+@dataclass
+class IdIndex:
+    """编号归属，由执行器查库得到后传进来（编译器本身不连数据库）。
+
+    owners:     过滤条件里出现的编号 → 所属店铺；查不到的编号不在里面
+    accessible: 有权限店铺下该类编号的全集，只在有编号查不到时才填，用来给"你是不是想找"的候选
+    """
+    owners: dict[str, dict[str, str]] = field(default_factory=dict)
+    accessible: dict[str, list[str]] = field(default_factory=dict)
+
+
+def check_id_filters(mql: MQL, allowed_shops: list[str], ids: IdIndex | None) -> None:
+    """第一层权限检查的补充（2026-11-11，评测题 P08 核对时发现）。
+
+    只检查 shop 过滤时，别家店的编号会被 SQL 层的店铺过滤静默滤掉，返回"花费 0"——没有泄露数据，
+    但用户拿到的是一个看起来正常的错误数字。这里在编译前就把它拒掉：
+      - 编号属于无权限店铺 → PermissionDenied（不重试，如实告诉用户）
+      - 编号不存在         → MQLError（多半是笔误，交给模型自修正；候选只从有权限的店铺里找，不泄露别家编号）
+    归属以数据库外键为准，不从编号前缀推断（真实 SKU 是卖家自己起的名字，没有店铺前缀）。
+    """
+    requested = {k: getattr(mql.filters, k) or [] for k in ID_FILTERS}
+    if not any(requested.values()):
+        return
+    if ids is None:   # 程序错误：调用方没查归属。宁可报错，也不放行（fail closed）
+        raise ValueError("IdIndex is required when MQL filters by sku / ad_group / campaign")
+    denied, unknown = [], []
+    for kind, values in requested.items():
+        for v in values:
+            owner = ids.owners.get(kind, {}).get(v)
+            if owner is None:
+                unknown.append((kind, v))
+            elif owner not in allowed_shops:
+                denied.append(f"{kind} {v} (belongs to shop {owner})")
+    if denied:
+        raise PermissionDenied([f"no permission for {', '.join(denied)}. "
+                                f"You can access: {', '.join(sorted(allowed_shops))}"])
+    if unknown:
+        errors = []
+        for kind, v in unknown:
+            close = difflib.get_close_matches(v, ids.accessible.get(kind, []), n=3, cutoff=0.6)
+            errors.append(f"{kind} {v} does not exist" + (f"; did you mean: {', '.join(close)}" if close else ""))
+        raise MQLError(errors)
 
 
 @dataclass
@@ -181,7 +230,8 @@ def _compile_window(mql: MQL, cat: Catalog, allowed: list[str], start: date, end
     for m in mql.metrics:
         spec = cat.metrics[m]
         expr = _formula_sql(spec["formula"])
-        digits = {"ratio": 6, "money": 2}.get(spec["unit"])
+        # 金额保留 4 位：单次点击花费只有 0.5 美元左右，保留 2 位会带来约 1% 的误差（2026-11-11 发现）
+        digits = {"ratio": 6, "money": 4}.get(spec["unit"])
         metric_cols.append(f"ROUND(({expr})::numeric, {digits}) AS {m}" if digits else f"{expr} AS {m}")
 
     order = (f"{mql.order_by.metric} {'DESC' if mql.order_by.desc else 'ASC'} NULLS LAST"
@@ -201,8 +251,9 @@ def _compile_window(mql: MQL, cat: Catalog, allowed: list[str], start: date, end
                          columns=dims + list(mql.metrics), refund_incomplete=refund_incomplete)
 
 
-def compile_mql(mql: MQL, cat: Catalog, allowed_shops: list[str]) -> CompiledMQL:
-    """allowed_shops 由服务端根据 user_id 查权限表得到，绝不来自 MQL 或模型。"""
+def compile_mql(mql: MQL, cat: Catalog, allowed_shops: list[str], ids: IdIndex | None = None) -> CompiledMQL:
+    """allowed_shops 由服务端根据 user_id 查权限表得到，绝不来自 MQL 或模型。
+    ids：过滤条件里编号的归属（执行器查库得到）；MQL 按编号过滤时必须提供。"""
     validate_against_catalog(mql, cat)
 
     if not allowed_shops:
@@ -212,6 +263,7 @@ def compile_mql(mql: MQL, cat: Catalog, allowed_shops: list[str]) -> CompiledMQL
         if denied:
             raise PermissionDenied([f"no permission for shop(s): {', '.join(denied)}. "
                                     f"You can access: {', '.join(sorted(allowed_shops))}"])
+    check_id_filters(mql, allowed_shops, ids)
 
     start, end = resolve_window(mql.time, cat.today)
     current = _compile_window(mql, cat, sorted(allowed_shops), start, end)

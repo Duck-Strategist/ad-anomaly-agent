@@ -22,14 +22,14 @@ from adagent.llm import LLM
 from adagent.nl2mql import Answer
 from adagent.nl2mql import answer_question as ours
 from eval.baseline_text2sql import answer_question as baseline
-from eval.check_reference import load_questions, run_gold
-from eval.scoring import compare_results
+from eval.check_reference import load_golds, load_questions
+from eval.scoring import compare_any
 
 ROOT = Path(__file__).resolve().parent
 SYSTEMS = {"ours": ours, "baseline": baseline}
 
 
-def score(q: dict, a: Answer, gold: list[dict] | None) -> tuple[bool, str]:
+def score(q: dict, a: Answer, golds: list | None) -> tuple[bool, str]:
     refused = a.status in ("refused", "cannot_answer")
     if q["expect"] == "refuse":
         return (True, f"refused: {a.message[:80]}") if refused else (False, f"expected refusal, got {a.status}")
@@ -40,7 +40,7 @@ def score(q: dict, a: Answer, gold: list[dict] | None) -> tuple[bool, str]:
             return False, "returned partial scope without telling the user"
     if a.status != "rows":
         return False, f"{a.status}: {a.message[:120]}"
-    return compare_results(gold, a.rows)
+    return compare_any(golds, a.rows)
 
 
 def _jsonable(v):
@@ -53,12 +53,12 @@ def _jsonable(v):
 
 def run_one(q: dict, system: str, model: str) -> dict:
     llm = LLM(model)
-    gold = run_gold(q["gold_sql"]) if q.get("gold_sql") else None
+    golds = load_golds(q)
     try:
         a = SYSTEMS[system](q["question"], q["user_id"], llm)
     except Exception as e:  # 网络等异常也记录下来，不中断整轮评测
         a = Answer("failed", message=f"exception: {type(e).__name__}: {e}")
-    ok, why = score(q, a, gold)
+    ok, why = score(q, a, golds)
     return {
         "id": q["id"], "category": q["category"], "trap": q.get("trap"), "user_id": q["user_id"],
         "question": q["question"], "expect": q["expect"],

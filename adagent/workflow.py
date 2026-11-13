@@ -58,7 +58,8 @@ class State(TypedDict, total=False):
     clarify_reply: str         # 用户对反问的回答（按钮值或自由文本）
     attribution: dict          # decompose_roas 的结果
     conclusion: dict           # 结构化结论（评测用）：main_cause / ad_group_id / suggest_pause / significant
-    explanation: str
+    explanation: str           # basis + 模型写的解释
+    basis: str                 # 代码生成的口径和对比窗口说明
     proposal: dict
     decision: dict
     execution: dict
@@ -204,8 +205,12 @@ def build_graph(llm: LLM, checkpointer) -> Any:
         call = llm.chat_json([{"role": "system", "content": EXPLAIN_PROMPT},
                               {"role": "user", "content": json.dumps(summary, ensure_ascii=False)}])
         text = (call.parsed or {}).get("explanation", "") if not call.error else ""
+        # 口径和窗口由代码写明，不依赖模型记得说（SPEC Q15：用户说"ROI"时归因固定按净 ROAS 分析，不反问）
+        w, pw = r["window"], r["previous_window"]
+        basis = (f"分析口径：净 ROAS（扣除退款后的广告投入产出比）；"
+                 f"对比窗口：{w[0]}~{w[1]} vs {pw[0]}~{pw[1]}。")
         status = "awaiting_approval" if state["conclusion"]["suggest_pause"] else "answered"
-        return {"explanation": text, "status": status}
+        return {"explanation": f"{basis}\n{text}", "basis": basis, "status": status}
 
     def after_explain(state: State) -> str:
         return "create_proposal" if state["conclusion"]["suggest_pause"] else END

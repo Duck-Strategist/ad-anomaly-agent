@@ -54,10 +54,11 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 | `eval/` | 评测题、评分器、基线（Text-to-SQL）、运行器；`eval/ground_truth/events.json` 是事件真值，只给评测用 |
 | `tests/` | 权限、编译器、评分器、分解算法的测试 |
 
-## 当前进度（2026-11-10）
+## 当前进度（2026-11-12）
 
 - **M1 完成**：数据层、语义层、编译器、NL→MQL、Text-to-SQL 基线、40 道评测题（陷阱题和越权题已人工审核）。
 - **M2 进行中**：`decompose_roas`、LangGraph 归因工作流（`adagent/workflow.py`）和幂等审批执行（`adagent/actions.py`）已完成。checkpoint 存在 PostgreSQL 的 `graph` schema（`agent_graph` 角色）。
 - **歧义反问已完成**（2026-11-11，`adagent/clarify.py` + 工作流 `ask_clarify` / `apply_clarify` 节点，接口 `answer_clarification()`）。
-- **下一步**：补齐 110 道评测题（含更难的口语化问法和 25 道归因题）、ReAct 归因基线、LLM judge 校准。
+- **M2 查询题 36 道已完成并人工审核**（`eval/questions/m2_query.yaml`）：问法由 Gemini 按 `eval/question_brief.md` 生成（避免出题人接触系统 prompt），用户审核。`eval/crosscheck_csv.py` 用生成器 CSV 独立重算并检查陷阱是否考得出；评分器支持多个可接受的 gold（`gold_sql_alt` + `key_aliases`）。
+- **下一步**：10 道歧义题（问法同样交给第三方模型）、25 道归因题、运行器支持工作流类题目和 pass^3、ReAct 归因基线、LLM judge 校准。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点；归因相对 ReAct 基线的目标待补）。

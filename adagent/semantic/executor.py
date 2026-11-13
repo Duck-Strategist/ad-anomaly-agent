@@ -16,8 +16,32 @@ from pydantic import ValidationError
 from ..db import allowed_shops as lookup_allowed_shops
 from ..db import reader_conn
 from .catalog import load_catalog
-from .compiler import CompiledQuery, PermissionDenied, compile_mql
+from .compiler import ID_FILTERS, CompiledQuery, IdIndex, PermissionDenied, compile_mql
 from .mql import MQL, MQLError, ShopId
+
+# 编号 → 所属店铺的查法（以外键为准）。只有这几段固定 SQL，编号本身走参数绑定
+_ID_SOURCES = {
+    "sku":      ("products x", "x.sku_id", "x.shop_id"),
+    "ad_group": ("ad_groups x JOIN ad_campaigns c ON c.campaign_id = x.campaign_id", "x.ad_group_id", "c.shop_id"),
+    "campaign": ("ad_campaigns x", "x.campaign_id", "x.shop_id"),
+}
+
+
+def _id_index(conn: psycopg.Connection, parsed: MQL, allowed: list[str]) -> IdIndex | None:
+    requested = {k: getattr(parsed.filters, k) or [] for k in ID_FILTERS}
+    if not any(requested.values()):
+        return None
+    idx = IdIndex()
+    for kind, values in requested.items():
+        if not values:
+            continue
+        frm, id_col, shop_col = _ID_SOURCES[kind]
+        rows = conn.execute(f"SELECT {id_col}, {shop_col} FROM {frm} WHERE {id_col} = ANY(%s)", (values,)).fetchall()
+        idx.owners[kind] = dict(rows)
+        if set(values) - idx.owners[kind].keys():   # 有查不到的编号：取有权限店铺下的全集，用来给候选
+            idx.accessible[kind] = [r[0] for r in conn.execute(
+                f"SELECT {id_col} FROM {frm} WHERE {shop_col} = ANY(%s) ORDER BY 1", (allowed,)).fetchall()]
+    return idx
 
 
 def _run(conn: psycopg.Connection, q: CompiledQuery) -> list[dict]:
@@ -54,7 +78,9 @@ def query_metrics(mql: dict, user_id: str) -> dict:
 
     try:
         allowed = lookup_allowed_shops(user_id)
-        compiled = compile_mql(parsed, cat, allowed)
+        with reader_conn() as conn:
+            ids = _id_index(conn, parsed, allowed)
+        compiled = compile_mql(parsed, cat, allowed, ids)
     except PermissionDenied as e:
         return {"ok": False, "error_type": "permission", "errors": e.errors, "mql": mql}
     except MQLError as e:

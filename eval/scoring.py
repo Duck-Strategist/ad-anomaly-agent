@@ -44,8 +44,31 @@ def _col_matches(gold: list, cand: list) -> bool:
             or all(_close(g * 100 if g is not None else None, c) for g, c in zip(gold, cand)))
 
 
-def compare_results(gold_rows: list[dict], cand_rows: list[dict]) -> tuple[bool, str]:
-    """返回 (是否正确, 原因)。"""
+def _alias_key(v) -> str:
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)                          # 月份写成数字 9 / 9.0 时都按 "9" 查别名
+    return str(v).strip().lower()
+
+
+def compare_any(golds: list[tuple[list[dict], dict | None]], cand_rows: list[dict]) -> tuple[bool, str]:
+    """一道题可以有多个可接受的标准答案（如同一组数字的宽表 / 长表写法），和其中任意一个完全对上就算对。
+    golds：[(gold_rows, key_aliases), ...]，第一个是主 gold。"""
+    reasons = []
+    for i, (rows, aliases) in enumerate(golds):
+        ok, why = compare_results(rows, cand_rows, aliases)
+        if ok:
+            return True, why if i == 0 else f"{why} (alt gold {i})"
+        reasons.append(why)
+    return False, reasons[0] if len(reasons) == 1 else " | ".join(f"gold {i}: {r}" for i, r in enumerate(reasons))
+
+
+def compare_results(gold_rows: list[dict], cand_rows: list[dict],
+                    key_aliases: dict[str, list[str]] | None = None) -> tuple[bool, str]:
+    """返回 (是否正确, 原因)。
+
+    key_aliases：键列取值的别名表，{标准值: [可接受的写法, ...]}，例如 {"2026-09": ["2026-09-01", "9月", "sep"]}。
+    用于长表 gold 里"时间段"这类没有统一写法的键：候选结果的键值先按别名换成标准值再对齐。
+    键仍然参与对齐，所以把 9 月和 10 月的数字放反了照样判错——这正是不用"只比数值集合"的原因。"""
     if len(gold_rows) != len(cand_rows):
         return False, f"row count {len(cand_rows)} != expected {len(gold_rows)}"
     if not gold_rows:
@@ -60,9 +83,22 @@ def compare_results(gold_rows: list[dict], cand_rows: list[dict]) -> tuple[bool,
     num_cols = [k for k in g_cols if _is_num(G[k])]
 
     # 1. 找到候选结果中与每个键列取值集合相同的列，并据此对齐行
+    alias = {}
+    for canon, alts in (key_aliases or {}).items():
+        for a in [canon, *alts]:
+            alias[_alias_key(a)] = canon
+    canon_of = lambda v: alias.get(_alias_key(v), v) if alias else v
+
     key_map = {}
     for k in key_cols:
-        match = next((c for c in c_cols if c not in key_map.values() and sorted(map(str, C[c])) == sorted(map(str, G[k]))), None)
+        match = None
+        for c in c_cols:
+            if c in key_map.values():
+                continue
+            vals = [canon_of(x) for x in C[c]]
+            if sorted(map(str, vals)) == sorted(map(str, G[k])):
+                match, C[c] = c, vals          # 换成标准值，后面按它排序对齐
+                break
         if match is None:
             return False, f"no column matching key '{k}' (values {sorted(map(str, G[k]))[:5]}...)"
         key_map[k] = match

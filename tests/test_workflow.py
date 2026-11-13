@@ -149,3 +149,6 @@ def test_no_proposal_when_cause_is_promotion(saver):
     r = run("JP-AG08 那周为什么 ROI 变差了", "u_admin", g)
     assert r["state"]["conclusion"]["main_cause"] == "ad_aov"
     assert r["pending_approval"] is None and audit_rows() == []
+    # 口径和窗口由代码写明（SPEC Q15），不依赖模型
+    assert r["state"]["explanation"].startswith("分析口径：净 ROAS")
+    assert "2026-10-19~2026-10-25 vs 2026-10-12~2026-10-18" in r["state"]["basis"]

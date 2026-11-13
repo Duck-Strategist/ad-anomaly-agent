@@ -16,7 +16,7 @@ import pytest
 
 from adagent.db import reader_conn
 from adagent.semantic.catalog import load_catalog
-from adagent.semantic.compiler import PermissionDenied, compile_mql
+from adagent.semantic.compiler import IdIndex, PermissionDenied, compile_mql
 from adagent.semantic.executor import query_metrics
 from adagent.semantic.mql import MQL, MQLError
 
@@ -24,8 +24,12 @@ CAT = load_catalog()
 OUT = Path(__file__).resolve().parent.parent / "datagen" / "out"
 
 
-def compile_(q: dict, shops=("US", "UK", "JP")):
-    return compile_mql(MQL.model_validate(q), CAT, list(shops))
+def compile_(q: dict, shops=("US", "UK", "JP"), ids: IdIndex | None = None):
+    mql = MQL.model_validate(q)
+    if ids is None:   # 测试桩：把过滤条件里的编号都当作属于第一个有权限的店铺（编号归属另有专门的测试）
+        ids = IdIndex(owners={k: {v: shops[0] for v in getattr(mql.filters, k) or []}
+                              for k in ("sku", "ad_group", "campaign")})
+    return compile_mql(mql, CAT, list(shops), ids)
 
 
 # ======================= 单元测试 =======================
@@ -62,6 +66,41 @@ def test_values_are_bound_not_inlined():
 def test_permission_denied_for_unauthorized_shop():
     with pytest.raises(PermissionDenied):
         compile_({"metrics": ["ad_spend"], "filters": {"shop": ["UK"]}, "time": {"range": "last_week"}}, shops=["US"])
+
+
+def test_other_shops_ids_are_refused():
+    """P08：用别家店的商品 / 广告组 / 广告活动编号提问，必须拒绝，而不是被 SQL 层滤成 0。"""
+    ids = IdIndex(owners={"sku": {"JP-SKU04": "JP"}, "ad_group": {"UK-AG02": "UK"}, "campaign": {"US-C1": "US"}})
+    for flt in ({"sku": ["JP-SKU04"]}, {"ad_group": ["UK-AG02"]}, {"sku": ["JP-SKU04"], "campaign": ["US-C1"]}):
+        with pytest.raises(PermissionDenied, match="belongs to shop"):
+            compile_({"metrics": ["ad_spend"], "filters": flt, "time": {"range": "last_week"}}, shops=["US"], ids=ids)
+    compile_({"metrics": ["ad_spend"], "filters": {"campaign": ["US-C1"]}, "time": {"range": "last_week"}},
+             shops=["US"], ids=ids)   # 自己店的编号照常放行
+
+
+def test_unknown_id_suggests_only_accessible_ids():
+    ids = IdIndex(owners={"ad_group": {}}, accessible={"ad_group": ["US-AG06", "US-AG07", "US-AG08"]})
+    with pytest.raises(MQLError, match="does not exist; did you mean: US-AG07") as e:
+        compile_({"metrics": ["cvr"], "filters": {"ad_group": ["US-AG7"]}, "time": {"range": "last_week"}},
+                 shops=["US"], ids=ids)
+    assert not isinstance(e.value, PermissionDenied)   # 不存在 ≠ 无权限：前者交给模型重试
+
+
+def test_id_filter_without_index_fails_closed():
+    with pytest.raises(ValueError):
+        compile_mql(MQL.model_validate({"metrics": ["ad_spend"], "filters": {"sku": ["US-SKU01"]},
+                                        "time": {"range": "last_week"}}), CAT, ["US"])
+
+
+def test_p08_end_to_end_refused():
+    """真实查库：美国店助理问日本店商品 → 权限错误；问不存在的编号 → 校验错误并给出本店候选。"""
+    r = query_metrics({"metrics": ["ad_spend"], "filters": {"sku": ["JP-SKU04"]},
+                       "time": {"range": "custom", "start": "2026-11-07", "end": "2026-11-07"}}, "u_viewer_us")
+    assert not r["ok"] and r["error_type"] == "permission" and "JP-SKU04" in r["errors"][0]
+    r = query_metrics({"metrics": ["ad_spend"], "filters": {"ad_group": ["US-AG7"]},
+                       "time": {"range": "last_week"}}, "u_viewer_us")
+    assert not r["ok"] and r["error_type"] == "validation"
+    assert "US-AG07" in r["errors"][0] and "UK-" not in r["errors"][0] and "JP-" not in r["errors"][0]
 
 
 def test_no_shop_filter_defaults_to_allowed_shops():
@@ -153,7 +192,7 @@ def test_jp_gross_sales_three_ways(csv_orders):
         JOIN fx_rates fx ON fx.rate_date = x.d AND fx.currency = 'JPY'
         WHERE x.d BETWEEN %(s)s AND %(e)s""", {"s": start, "e": end})
     py = window_sum(gross, shop="JP", start=start, end=end)
-    assert rows[0]["gross_sales"] == round(hand, 2) == round(py, 2)
+    assert rows[0]["gross_sales"] == round(hand, 4) == round(py, 4)   # 金额保留 4 位（2026-11-11 起）
 
 
 def test_uk_refund_rate_during_refund_spike_three_ways(csv_orders):

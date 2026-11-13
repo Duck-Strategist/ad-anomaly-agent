@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from eval.check_reference import load_questions, run_gold
-from eval.scoring import compare_results
+from eval.scoring import compare_any, compare_results
 
 QUESTIONS = {q["id"]: q for q in load_questions(Path(__file__).resolve().parent.parent / "eval" / "questions" / "m1.yaml")}
 
@@ -28,6 +28,40 @@ def test_tolerance_and_percent_form():
 
 def test_row_count_mismatch_fails():
     assert not compare_results([{"v": 1}], [{"v": 1}, {"v": 2}])[0]
+
+
+# ---------- 多个可接受的 gold（宽表 / 长表）与键值别名 ----------
+
+WIDE = [{"acos_oct": Decimal("0.21"), "acos_sep": Decimal("0.18")}]
+LONG = [{"period": "2026-09", "acos": Decimal("0.18")}, {"period": "2026-10", "acos": Decimal("0.21")}]
+ALIASES = {"2026-09": ["9月", "sep", "2026-09-01"], "2026-10": ["10月", "oct", "2026-10-01"]}
+
+
+def test_long_format_accepted_via_alt_gold_and_aliases():
+    golds = [(WIDE, None), (LONG, ALIASES)]
+    assert compare_any(golds, [{"m": "10月", "v": 0.21}, {"m": "9月", "v": 0.18}])[0]
+    assert compare_any(golds, [{"m": "2026-09-01", "v": 0.18}, {"m": "2026-10-01", "v": 0.21}])[0]   # date_trunc 的写法
+    assert compare_any(golds, [{"a": 0.21, "b": 0.18}])[0]                                           # 宽表照样对
+
+
+def test_swapped_periods_still_fail():
+    """别名只是换写法，键仍参与对齐：把 9 月和 10 月的数字放反必须判错（只比数值集合就会误判为对）。"""
+    golds = [(WIDE, None), (LONG, ALIASES)]
+    assert not compare_any(golds, [{"m": "9月", "v": 0.21}, {"m": "10月", "v": 0.18}])[0]
+    assert not compare_any(golds, [{"m": "八月", "v": 0.18}, {"m": "10月", "v": 0.21}])[0]   # 不认识的写法不放行
+
+
+M2 = {q["id"]: q for q in load_questions(Path(__file__).resolve().parent.parent / "eval" / "questions" / "m2_query.yaml")}
+
+
+@pytest.mark.parametrize("qid", [k for k, q in M2.items() if q.get("gold_sql_alt")])
+def test_alt_gold_has_same_numbers_as_main_gold(qid):
+    """长表 gold 是另一条独立手写的 SQL：它和主 gold 的数值集合必须一致，否则两者之一写错了。"""
+    def numbers(rows):
+        return sorted(round(float(v), 6) for r in rows for v in r.values() if isinstance(v, (int, float, Decimal)))
+    main = numbers(run_gold(M2[qid]["gold_sql"]))
+    for alt in M2[qid]["gold_sql_alt"]:
+        assert numbers(run_gold(alt["sql"])) == main
 
 
 # ---------- 陷阱题必须能区分对错 ----------
