@@ -1,0 +1,439 @@
+# M3 相对时间留出集（25 道）：相对时间 20（TH01–TH20）、部分有数据 2（TH21–TH22）、完全没有数据 3（TH23–TH25）
+#
+# 用途：相对时间的修复（SPEC Q19，MQL 增加 calendar）是看了 M2 全集里千问失败的 S15、S19、C19 之后设计的，
+#       在原题上复测会偏高。本文件在修复代码提交之前写好 gold 并冻结；修复期间不在这些题上跑模型，修复完成后只跑一次。
+# 来源：问法由 Gemini 按 eval/question_brief_time.md 生成（原始输出 eval/question_sources/gemini_2026-11-14_time.txt），
+#       用户挑选：删 B2（"大上个月"有两种理解），A8 去掉"按英镑算就行"（系统只按美元报告）；其余原样。source 对应原始编号。
+# 字段：同 m2_query.yaml。expect: no_data 表示必须回答"没有这个时间段的数据"（判分见 eval/run.py）。
+#
+# 金额统一折合美元：广告侧按 stat_date 当天汇率，订单侧（含退款）按订单的店铺本地下单日汇率。
+# "今天" = 2026-11-08（周日），数据从 2026-08-11 开始。
+#   昨天 11-07；前天 11-06；大前天 11-05；本周 11-02..11-08；上上周 10-19..10-25；三周前那一周 10-12..10-18；
+#   本月 11-01..11-08；上个月 10-01..10-31；上上个月 09-01..09-30。
+# gold 独立手写（不经编译器）；reference_mql 只给 check_reference 核对用，不给模型看。
+#
+# 审核状态：AI 起草，待人工审核
+
+# ============================== 相对时间 ==============================
+- id: TH01
+  category: time
+  source: gemini A1
+  user_id: u_admin
+  question: 帮我看下日本店昨天的订单金额和广告花费，都折算成美元报给我。
+  expect: rows
+  gold_sql: |
+    SELECT
+      (SELECT SUM(oi.qty * oi.unit_price * fx.rate_to_usd)
+       FROM orders o
+       JOIN order_items oi ON oi.order_id = o.order_id
+       JOIN fx_rates fx ON fx.currency = 'JPY' AND fx.rate_date = (o.created_at AT TIME ZONE 'Asia/Tokyo')::date
+       WHERE o.shop_id = 'JP' AND o.deleted_at IS NULL
+         AND (o.created_at AT TIME ZONE 'Asia/Tokyo')::date = '2026-11-07') AS gross_sales,
+      (SELECT SUM(s.spend * fx.rate_to_usd)
+       FROM ad_daily_stats s
+       JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+       JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+       JOIN fx_rates fx ON fx.currency = 'JPY' AND fx.rate_date = s.stat_date
+       WHERE c.shop_id = 'JP' AND s.stat_date = '2026-11-07') AS ad_spend
+  reference_mql: {metrics: [gross_sales, ad_spend], filters: {shop: [JP]}, time: {range: calendar, unit: day, offset: -1}}
+
+- id: TH02
+  category: time
+  source: gemini A2
+  user_id: u_ops_us
+  question: 麻烦查一下美国店前天一共出了多少单，订单金额是多少？
+  expect: rows
+  gold_sql: |
+    SELECT COUNT(DISTINCT o.order_id) AS order_count, SUM(oi.qty * oi.unit_price) AS gross_sales
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.order_id
+    WHERE o.shop_id = 'US' AND o.deleted_at IS NULL
+      AND (o.created_at AT TIME ZONE 'America/Los_Angeles')::date = '2026-11-06'
+  reference_mql: {metrics: [order_count, gross_sales], filters: {shop: [US]}, time: {range: calendar, unit: day, offset: -2}}
+
+- id: TH03
+  category: time
+  source: gemini A3
+  user_id: u_ops_us
+  question: 大前天我们美国店 10 个广告组里面，哪个组的 ACOS 最高？具体数值是多少？
+  expect: rows
+  gold_sql: |
+    SELECT s.ad_group_id, SUM(s.spend) / SUM(s.ad_sales) AS acos
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+    WHERE c.shop_id = 'US' AND s.stat_date = '2026-11-05'
+    GROUP BY s.ad_group_id
+    ORDER BY acos DESC
+    LIMIT 1
+  reference_mql: {metrics: [acos], dimensions: [ad_group], filters: {shop: [US]}, time: {range: calendar, unit: day, offset: -3}, order_by: {metric: acos, desc: true}, limit: 1}
+
+- id: TH04
+  category: time
+  source: gemini A4
+  user_id: u_ops_uk
+  question: 英国店这周到今天为止每天的广告花费和广告带来的销售额，按天拆开拉给我看看。
+  expect: rows
+  gold_sql: |
+    SELECT s.stat_date, SUM(s.spend * fx.rate_to_usd) AS ad_spend, SUM(s.ad_sales * fx.rate_to_usd) AS ad_sales
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+    JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = s.stat_date
+    WHERE c.shop_id = 'UK' AND s.stat_date BETWEEN '2026-11-02' AND '2026-11-08'
+    GROUP BY s.stat_date
+  reference_mql: {metrics: [ad_spend, ad_sales], dimensions: [date], filters: {shop: [UK]}, time: {range: calendar, unit: week, offset: 0}}
+
+- id: TH05
+  category: time
+  source: gemini A5
+  user_id: u_admin
+  question: 把三家店上上周扣除退款后的订单金额汇总在一起，按天拆开看每天分别是多少美元。
+  expect: rows
+  gold_sql: |
+    WITH l AS (
+      SELECT (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL
+        AND (o.created_at AT TIME ZONE sh.timezone)::date BETWEEN '2026-10-19' AND '2026-10-25')
+    SELECT d, SUM(amt) - SUM(ref) AS net_sales
+    FROM l GROUP BY d
+  reference_mql: {metrics: [net_sales], dimensions: [date], time: {range: calendar, unit: week, offset: -2}}
+
+- id: TH06
+  category: time
+  source: gemini A6
+  user_id: u_admin
+  question: 日本店三周前那一周投了广告的 10 个商品中，哪个商品广告带来的销售额最低？
+  expect: rows
+  gold_sql: |
+    SELECT g.sku_id, SUM(s.ad_sales * fx.rate_to_usd) AS ad_sales
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+    JOIN fx_rates fx ON fx.currency = 'JPY' AND fx.rate_date = s.stat_date
+    WHERE c.shop_id = 'JP' AND s.stat_date BETWEEN '2026-10-12' AND '2026-10-18'
+    GROUP BY g.sku_id
+    ORDER BY ad_sales ASC
+    LIMIT 1
+  # 1 个广告组只推 1 个商品（SPEC 语义层），按广告组回答 JP-AG01 指的是同一个对象，也接受（运行前决定）
+  gold_sql_alt:
+    - kind: shape
+      key_aliases: {JP-SKU01: [JP-AG01]}
+      sql: |
+        SELECT g.sku_id, SUM(s.ad_sales * fx.rate_to_usd) AS ad_sales
+        FROM ad_daily_stats s
+        JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+        JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+        JOIN fx_rates fx ON fx.currency = 'JPY' AND fx.rate_date = s.stat_date
+        WHERE c.shop_id = 'JP' AND s.stat_date BETWEEN '2026-10-12' AND '2026-10-18'
+        GROUP BY g.sku_id
+        ORDER BY ad_sales ASC
+        LIMIT 1
+  reference_mql: {metrics: [ad_sales], dimensions: [sku], filters: {shop: [JP]}, time: {range: calendar, unit: week, offset: -3}, order_by: {metric: ad_sales, desc: false}, limit: 1}
+
+- id: TH07
+  category: time
+  source: gemini A7
+  user_id: u_ops_us
+  question: 不好意思打扰下，我是刚接手美国店的助理，想问下这个月到现在 US-SKU03 每天的订单数和客单价，能按天列出来吗？
+  expect: rows
+  gold_sql: |
+    SELECT (o.created_at AT TIME ZONE 'America/Los_Angeles')::date AS d,
+           COUNT(DISTINCT o.order_id) AS order_count,
+           SUM(oi.qty * oi.unit_price) / COUNT(DISTINCT o.order_id) AS aov
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.order_id
+    WHERE o.shop_id = 'US' AND o.deleted_at IS NULL AND oi.sku_id = 'US-SKU03'
+      AND (o.created_at AT TIME ZONE 'America/Los_Angeles')::date BETWEEN '2026-11-01' AND '2026-11-08'
+    GROUP BY d
+  reference_mql: {metrics: [order_count, aov], dimensions: [date], filters: {sku: [US-SKU03]}, time: {range: calendar, unit: month, offset: 0}}
+
+- id: TH08
+  category: time
+  source: gemini A8
+  user_id: u_ops_uk
+  # 改写：去掉"按英镑算就行"。系统只按美元报告（同 M2 S15 的处理），这半句测的不是时间理解
+  question: 英国店上个月全店的退款金额和退款率各是多少？
+  expect: rows
+  gold_sql: |
+    WITH l AS (
+      SELECT oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = (o.created_at AT TIME ZONE 'Europe/London')::date
+      WHERE o.shop_id = 'UK' AND o.deleted_at IS NULL
+        AND (o.created_at AT TIME ZONE 'Europe/London')::date BETWEEN '2026-10-01' AND '2026-10-31')
+    SELECT SUM(ref) AS refund_amount, SUM(ref) / SUM(amt) AS refund_rate FROM l
+  reference_mql: {metrics: [refund_amount, refund_rate], filters: {shop: [UK]}, time: {range: calendar, unit: month, offset: -1}}
+
+- id: TH09
+  category: time
+  source: gemini A9
+  user_id: u_ops_us
+  question: 查一下美国店广告活动 US-C2 上上个月的总曝光、总点击和点击率。
+  expect: rows
+  gold_sql: |
+    SELECT SUM(s.impressions) AS impressions, SUM(s.clicks) AS clicks,
+           SUM(s.clicks)::numeric / SUM(s.impressions) AS ctr
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    WHERE g.campaign_id = 'US-C2' AND s.stat_date BETWEEN '2026-09-01' AND '2026-09-30'
+  reference_mql: {metrics: [impressions, clicks, ctr], filters: {campaign: [US-C2]}, time: {range: calendar, unit: month, offset: -2}}
+
+- id: TH10
+  category: time
+  source: gemini A10
+  user_id: u_admin
+  question: 美国店上个月的广告花费和 ROAS，按自然周拆开给我发一下。
+  expect: rows
+  # 按周一标周；首尾两周只统计 10 月内的日期（9-28 周只含 10-01~10-04，10-26 周含 10-26~10-31）
+  gold_sql: |
+    SELECT date_trunc('week', s.stat_date)::date AS week,
+           SUM(s.spend) AS ad_spend, SUM(s.ad_sales) / SUM(s.spend) AS roas
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+    WHERE c.shop_id = 'US' AND s.stat_date BETWEEN '2026-10-01' AND '2026-10-31'
+    GROUP BY week
+  reference_mql: {metrics: [ad_spend, roas], dimensions: [week], filters: {shop: [US]}, time: {range: calendar, unit: month, offset: -1}}
+
+- id: TH11
+  category: time
+  source: gemini A11
+  user_id: u_ops_uk
+  question: 请问英国店上上个月扣除退款后的订单金额，能不能按周拆开看每周的数据（折算成美元）？
+  expect: rows
+  gold_sql: |
+    WITH l AS (
+      SELECT (o.created_at AT TIME ZONE 'Europe/London')::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = (o.created_at AT TIME ZONE 'Europe/London')::date
+      WHERE o.shop_id = 'UK' AND o.deleted_at IS NULL
+        AND (o.created_at AT TIME ZONE 'Europe/London')::date BETWEEN '2026-09-01' AND '2026-09-30')
+    SELECT date_trunc('week', d)::date AS week, SUM(amt) - SUM(ref) AS net_sales
+    FROM l GROUP BY week
+  reference_mql: {metrics: [net_sales], dimensions: [week], filters: {shop: [UK]}, time: {range: calendar, unit: month, offset: -2}}
+
+- id: TH12
+  category: time
+  source: gemini A12
+  user_id: u_ops_uk
+  question: 上上周英国店 UK-C1、UK-C2、UK-C3 这三个广告活动里，哪个的 ROAS 最高？
+  expect: rows
+  gold_sql: |
+    SELECT g.campaign_id, SUM(s.ad_sales * fx.rate_to_usd) / SUM(s.spend * fx.rate_to_usd) AS roas
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = s.stat_date
+    WHERE g.campaign_id IN ('UK-C1', 'UK-C2', 'UK-C3') AND s.stat_date BETWEEN '2026-10-19' AND '2026-10-25'
+    GROUP BY g.campaign_id
+    ORDER BY roas DESC
+    LIMIT 1
+  reference_mql: {metrics: [roas], dimensions: [campaign], filters: {shop: [UK]}, time: {range: calendar, unit: week, offset: -2}, order_by: {metric: roas, desc: true}, limit: 1}
+
+- id: TH13
+  category: time
+  source: gemini A13
+  user_id: u_ops_us
+  question: 帮我拉一下 US-AG05 三周前那一周的单次点击花费和广告转化率，每天的数据分开列。
+  expect: rows
+  gold_sql: |
+    SELECT stat_date, SUM(spend) / SUM(clicks) AS cpc, SUM(ad_orders)::numeric / SUM(clicks) AS cvr
+    FROM ad_daily_stats
+    WHERE ad_group_id = 'US-AG05' AND stat_date BETWEEN '2026-10-12' AND '2026-10-18'
+    GROUP BY stat_date
+  reference_mql: {metrics: [cpc, cvr], dimensions: [date], filters: {ad_group: [US-AG05]}, time: {range: calendar, unit: week, offset: -3}}
+
+- id: TH14
+  category: time
+  source: gemini A14
+  user_id: u_admin
+  question: 日本店大前天广告带来的订单数和全店总订单数分别有多少？直接报两个数字就行。
+  expect: rows
+  gold_sql: |
+    SELECT
+      (SELECT SUM(s.ad_orders)
+       FROM ad_daily_stats s
+       JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+       JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+       WHERE c.shop_id = 'JP' AND s.stat_date = '2026-11-05') AS ad_orders,
+      (SELECT COUNT(*)
+       FROM orders o
+       WHERE o.shop_id = 'JP' AND o.deleted_at IS NULL
+         AND (o.created_at AT TIME ZONE 'Asia/Tokyo')::date = '2026-11-05') AS order_count
+  reference_mql: {metrics: [ad_orders, order_count], filters: {shop: [JP]}, time: {range: calendar, unit: day, offset: -3}}
+
+- id: TH15
+  category: time
+  source: gemini A15
+  user_id: u_ops_us
+  question: 昨天美国店所有商品里，哪个 SKU 的订单数最高？
+  expect: rows
+  gold_sql: |
+    SELECT oi.sku_id, COUNT(DISTINCT o.order_id) AS order_count
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.order_id
+    WHERE o.shop_id = 'US' AND o.deleted_at IS NULL
+      AND (o.created_at AT TIME ZONE 'America/Los_Angeles')::date = '2026-11-07'
+    GROUP BY oi.sku_id
+    ORDER BY order_count DESC
+    LIMIT 1
+  reference_mql: {metrics: [order_count], dimensions: [sku], filters: {shop: [US]}, time: {range: calendar, unit: day, offset: -1}, order_by: {metric: order_count, desc: true}, limit: 1}
+
+- id: TH16
+  category: time
+  source: gemini A16
+  user_id: u_ops_uk
+  question: 英国店 UK-SKU08 这周到今天为止一共退了多少钱，退款率是多少？
+  expect: rows
+  gold_sql: |
+    WITH l AS (
+      SELECT oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = (o.created_at AT TIME ZONE 'Europe/London')::date
+      WHERE o.shop_id = 'UK' AND o.deleted_at IS NULL AND oi.sku_id = 'UK-SKU08'
+        AND (o.created_at AT TIME ZONE 'Europe/London')::date BETWEEN '2026-11-02' AND '2026-11-08')
+    SELECT SUM(ref) AS refund_amount, SUM(ref) / SUM(amt) AS refund_rate FROM l
+  reference_mql: {metrics: [refund_amount, refund_rate], filters: {sku: [UK-SKU08]}, time: {range: calendar, unit: week, offset: 0}}
+
+- id: TH17
+  category: time
+  source: gemini A17
+  user_id: u_admin
+  question: 这个月到现在，美国、英国、日本三家店里哪家店的退款率最低？各自是多少？
+  expect: rows
+  gold_sql: |
+    WITH l AS (
+      SELECT o.shop_id,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL
+        AND (o.created_at AT TIME ZONE sh.timezone)::date BETWEEN '2026-11-01' AND '2026-11-08')
+    SELECT shop_id, SUM(ref) / SUM(amt) AS refund_rate FROM l GROUP BY shop_id
+  reference_mql: {metrics: [refund_rate], dimensions: [shop], time: {range: calendar, unit: month, offset: 0}}
+
+- id: TH18
+  category: time
+  source: gemini A18
+  user_id: u_ops_us
+  question: 前天美国店广告活动 US-C1 的广告花费、点击量还有单次点击花费分别是多少？
+  expect: rows
+  gold_sql: |
+    SELECT SUM(s.spend) AS ad_spend, SUM(s.clicks) AS clicks, SUM(s.spend) / SUM(s.clicks) AS cpc
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    WHERE g.campaign_id = 'US-C1' AND s.stat_date = '2026-11-06'
+  reference_mql: {metrics: [ad_spend, clicks, cpc], filters: {campaign: [US-C1]}, time: {range: calendar, unit: day, offset: -2}}
+
+- id: TH19
+  category: time
+  source: gemini A19
+  user_id: u_ops_uk
+  question: 英国店上上周全店的订单金额和客单价，帮我一天一天拆开看。
+  expect: rows
+  gold_sql: |
+    SELECT (o.created_at AT TIME ZONE 'Europe/London')::date AS d,
+           SUM(oi.qty * oi.unit_price * fx.rate_to_usd) AS gross_sales,
+           SUM(oi.qty * oi.unit_price * fx.rate_to_usd) / COUNT(DISTINCT o.order_id) AS aov
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.order_id
+    JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = (o.created_at AT TIME ZONE 'Europe/London')::date
+    WHERE o.shop_id = 'UK' AND o.deleted_at IS NULL
+      AND (o.created_at AT TIME ZONE 'Europe/London')::date BETWEEN '2026-10-19' AND '2026-10-25'
+    GROUP BY d
+  reference_mql: {metrics: [gross_sales, aov], dimensions: [date], filters: {shop: [UK]}, time: {range: calendar, unit: week, offset: -2}}
+
+- id: TH20
+  category: time
+  source: gemini A20
+  user_id: u_ops_us
+  question: 我是新来的运营助理，请问美国店上个月全部 10 个广告组里，哪个组的广告带来的销售额最低？
+  expect: rows
+  gold_sql: |
+    SELECT s.ad_group_id, SUM(s.ad_sales) AS ad_sales
+    FROM ad_daily_stats s
+    JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+    JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+    WHERE c.shop_id = 'US' AND s.stat_date BETWEEN '2026-10-01' AND '2026-10-31'
+    GROUP BY s.ad_group_id
+    ORDER BY ad_sales ASC
+    LIMIT 1
+  reference_mql: {metrics: [ad_sales], dimensions: [ad_group], filters: {shop: [US]}, time: {range: calendar, unit: month, offset: -1}, order_by: {metric: ad_sales, desc: false}, limit: 1}
+
+# ============================== 只有一部分时间有数据 ==============================
+# gold 只统计数据范围内的部分。回答说明是否写清"实际只覆盖 2026-08-11 起"另行人工检查，不计入分数。
+- id: TH21
+  category: time_partial
+  source: gemini B1
+  user_id: u_admin
+  question: 帮我算下日本店今年第三季度扣除退款后的订单金额，折算成美元是多少？
+  expect: rows
+  gold_sql: |
+    WITH l AS (
+      SELECT oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = 'JPY' AND fx.rate_date = (o.created_at AT TIME ZONE 'Asia/Tokyo')::date
+      WHERE o.shop_id = 'JP' AND o.deleted_at IS NULL
+        AND (o.created_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN '2026-07-01' AND '2026-09-30')
+    SELECT SUM(amt) - SUM(ref) AS net_sales FROM l
+  reference_mql: {metrics: [net_sales], filters: {shop: [JP]}, time: {range: custom, start: 2026-07-01, end: 2026-09-30}}
+
+- id: TH22
+  category: time_partial
+  source: gemini B3
+  user_id: u_ops_uk
+  question: 请问英国店今年下半年到今天为止，全店累计订单数和退款金额各是多少？
+  expect: rows
+  gold_sql: |
+    SELECT COUNT(DISTINCT o.order_id) AS order_count,
+           SUM((SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd) AS refund_amount
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.order_id
+    JOIN fx_rates fx ON fx.currency = 'GBP' AND fx.rate_date = (o.created_at AT TIME ZONE 'Europe/London')::date
+    WHERE o.shop_id = 'UK' AND o.deleted_at IS NULL
+      AND (o.created_at AT TIME ZONE 'Europe/London')::date BETWEEN '2026-07-01' AND '2026-11-08'
+  reference_mql: {metrics: [order_count, refund_amount], filters: {shop: [UK]}, time: {range: custom, start: 2026-07-01, end: 2026-11-08}}
+
+# ============================== 完全没有数据 ==============================
+# 必须回答没有数据。返回 0 判错（"没有数据"不等于"数值为 0"，SPEC Q18）；空结果或全是空值不判错（没有给出数字）。
+- id: TH23
+  category: time_no_data
+  source: gemini C1
+  user_id: u_admin
+  question: 查一下我们三家店今年第二季度的订单金额总和，折算成美元报给我。
+  expect: no_data
+  reference_mql: {metrics: [gross_sales], time: {range: custom, start: 2026-04-01, end: 2026-06-30}}
+
+- id: TH24
+  category: time_no_data
+  source: gemini C2
+  user_id: u_ops_us
+  question: 美国店今年上半年的退款率和客单价分别是多少？
+  expect: no_data
+  reference_mql: {metrics: [refund_rate, aov], filters: {shop: [US]}, time: {range: custom, start: 2026-01-01, end: 2026-06-30}}
+
+- id: TH25
+  category: time_no_data
+  source: gemini C3
+  user_id: u_ops_uk
+  question: 英国店去年第四季度广告带来的销售额和 ROAS 是多少？
+  expect: no_data
+  reference_mql: {metrics: [ad_sales, roas], filters: {shop: [UK]}, time: {range: custom, start: 2025-10-01, end: 2025-12-31}}

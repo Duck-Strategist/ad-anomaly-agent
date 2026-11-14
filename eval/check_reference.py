@@ -47,6 +47,10 @@ def score_system_result(q: dict, result: dict, golds: list | None) -> tuple[bool
             return True, "refused"
         if result["ok"] and not result["scope_limited"]:
             return False, "returned partial scope without telling the user"
+    if q["expect"] == "no_data":
+        if not result["ok"] and result["error_type"] == "out_of_range":
+            return True, "out of range"
+        return False, f"expected out_of_range, got ok={result['ok']} {result.get('error_type')}"
     if not result["ok"]:
         return False, f"{result['error_type']}: {result['errors']}"
     return compare_any(golds, result["rows"])

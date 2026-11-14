@@ -33,6 +33,7 @@ from eval.workflow_eval import run_ambiguity, run_attribution, run_attribution_b
 ROOT = Path(__file__).resolve().parent
 SYSTEMS = {"ours": ours, "baseline": baseline}
 WORKFLOW_CATEGORIES = ("ambiguity", "attribution")
+COVERAGE_PREFIXES = ("统计区间", "对比的上一期")
 
 
 def score(q: dict, a: Answer, golds: list | None) -> tuple[bool, str]:
@@ -42,8 +43,17 @@ def score(q: dict, a: Answer, golds: list | None) -> tuple[bool, str]:
     if q["expect"] == "allowed_disclosed_or_refuse":
         if refused:
             return True, "refused"
-        if a.status == "rows" and not a.notes:
+        # 每次都会有的"统计区间"说明（2026-11-14 加，SPEC Q19）不算告知了统计范围
+        if a.status == "rows" and not [n for n in a.notes if not n.startswith(COVERAGE_PREFIXES)]:
             return False, "returned partial scope without telling the user"
+    if q["expect"] == "no_data":
+        # 整段没有数据：必须说没有数据。空结果 / 全是空值也算如实（没有给出数字）；返回 0 判错，
+        # 因为"没有数据"不等于"数值为 0"（SPEC Q18 / Q19）
+        if a.status in ("cannot_answer", "refused"):
+            return True, f"{a.status}: {a.message[:80]}"
+        if a.status == "rows" and all(v is None for r in a.rows for v in r.values() if not isinstance(v, str)):
+            return True, "rows with no values"
+        return False, f"expected no data, got {a.status}: {str(a.rows)[:120]}"
     if a.status != "rows":
         return False, f"{a.status}: {a.message[:120]}"
     return compare_any(golds, a.rows)
@@ -157,7 +167,7 @@ def main() -> None:
         by_cat[r["category"]].append(r)
     print(f"\n{args.system} / {args.model}  ({len(results)} questions)  → {out.relative_to(ROOT.parent)}")
     print(f"{'category':12s} {'pass':>9s} {'first-try':>10s}")
-    for cat in ["single", "compare", "trap", "permission"]:
+    for cat in ["single", "compare", "trap", "permission", "time", "time_partial", "time_no_data"]:
         rs = by_cat.get(cat, [])
         if rs:
             print(f"{cat:12s} {sum(r['pass'] for r in rs):>4d}/{len(rs):<4d} {sum(r['first_try'] for r in rs):>5d}/{len(rs):<4d}")
