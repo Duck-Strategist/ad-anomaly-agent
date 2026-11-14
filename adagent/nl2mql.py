@@ -21,6 +21,7 @@ from .clarify import check_resolved_used, options_for, validate_clarify
 from .llm import LLM
 from .semantic.catalog import Catalog, load_catalog
 from .semantic.executor import query_metrics
+from .semantic.mql import time_rules
 
 MAX_RETRIES = 2
 
@@ -48,10 +49,7 @@ def build_system_prompt(cat: Catalog) -> str:
 所有金额由系统统一折合美元，你不需要处理币种。
 
 ## 时间
-今天是 {cat.today}（周日），一周从周一开始。
-- "本周" → this_week；"上周" → last_week
-- "最近 7 / 14 / 30 天" → last_7_days / last_14_days / last_30_days
-- 具体日期、月份或其他天数 → custom，并给出 start、end（含首尾，格式 YYYY-MM-DD）
+{time_rules(cat.today)}
 - 要求和前一个等长周期对比（"和上周比""和前 7 天比""环比"）→ 在当前周期上加 "compare": "previous_period"
 
 ## MQL 格式
@@ -59,7 +57,7 @@ def build_system_prompt(cat: Catalog) -> str:
   "metrics": ["指标名", ...],                 // 1–6 个
   "dimensions": ["维度名", ...],              // 可选，最多 3 个；要"每个 / 分别 / 按…"时才用
   "filters": {{"shop": [...], "sku": [...], "ad_group": [...], "campaign": [...]}},   // 可选
-  "time": {{"range": "...", "start": "...", "end": "...", "compare": "previous_period"}},
+  "time": {{"range": "...", "start": "...", "end": "...", "unit": "...", "offset": 0, "compare": "previous_period"}},   // 只填所选 range 需要的字段
   "order_by": {{"metric": "指标名", "desc": true}},   // 可选；问"最高 / 最低 / 前几"时用，配合 limit
   "limit": 200                                // 可选
 }}
@@ -84,6 +82,9 @@ def build_system_prompt(cat: Catalog) -> str:
 
 问：日本店 JP-SKU01 在 9 月 1 日到 15 日的订单客单价
 答：{{"mql": {{"metrics": ["aov"], "filters": {{"sku": ["JP-SKU01"]}}, "time": {{"range": "custom", "start": "2026-09-01", "end": "2026-09-15"}}}}}}
+
+问：昨天日本店的订单数
+答：{{"mql": {{"metrics": ["order_count"], "filters": {{"shop": ["JP"]}}, "time": {{"range": "calendar", "unit": "day", "offset": -1}}}}}}
 
 问：美国店本周的退款率和上周比怎么样
 答：{{"mql": {{"metrics": ["refund_rate"], "filters": {{"shop": ["US"]}}, "time": {{"range": "this_week", "compare": "previous_period"}}}}}}
@@ -143,7 +144,7 @@ def answer_question(question: str, user_id: str, llm: LLM, resolved_terms: dict[
             result = query_metrics(last_mql, user_id)
             record["result"] = {k: result.get(k) for k in ("ok", "error_type", "errors")}
             if result["ok"]:
-                notes = []
+                notes = list(result["coverage_notes"])
                 if result["scope_limited"]:
                     notes.append(f"仅统计了您有权限的店铺：{', '.join(result['shops_in_scope'])}")
                 if result["refund_incomplete"]:
@@ -157,6 +158,10 @@ def answer_question(question: str, user_id: str, llm: LLM, resolved_terms: dict[
         record["feedback"] = feedback
         messages += [{"role": "assistant", "content": call.output}, {"role": "user", "content": feedback}]
 
+    # 重试后时间段仍整段在数据范围外：如实说没有数据，不当成系统故障（SPEC Q18 / Q19）
+    if attempts[-1].get("result", {}).get("error_type") == "out_of_range":
+        return Answer("cannot_answer", message="没有这个时间段的数据：" + "; ".join(attempts[-1]["result"]["errors"]),
+                      mql=last_mql, attempts=attempts)
     # 超过重试上限：降级，返回最后一次的 MQL 和错误供人查看
     return Answer("failed", message=attempts[-1].get("feedback", ""), mql=last_mql, attempts=attempts)
 

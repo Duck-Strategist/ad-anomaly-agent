@@ -40,7 +40,7 @@ from .db import reader_conn
 from .llm import LLM
 from .nl2mql import answer_question
 from .semantic.catalog import load_catalog
-from .semantic.mql import TimeSpec, resolve_window
+from .semantic.mql import TimeSpec, resolve_window, time_rules
 
 CAUSE_NAMES = {"cvr": "转化率下降", "ad_aov": "广告客单价下降", "cpc": "点击成本上升", "refund": "退款增加"}
 
@@ -93,8 +93,7 @@ ROUTE_PROMPT = """你是跨境电商经营助手的路由器。判断用户问�
      只有问原因、问怎么办、问表现好不好时才是归因。
 3. 其他：与经营数据无关。{{"intent": "cannot_answer", "reason": "..."}}
 
-时间：今天是 {today}（周日），一周从周一开始。"本周"→this_week，"上周"→last_week，
-"最近 7/14/30 天"→last_7_days/last_14_days/last_30_days，具体日期→{{"range": "custom", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}}。
+时间：{time_rules}
 """
 
 EXPLAIN_PROMPT = """你是跨境电商广告分析师。下面是系统用确定性算法算出的归因结果（JSON）。
@@ -129,7 +128,7 @@ def build_graph(llm: LLM, checkpointer) -> Any:
         return None
 
     def route(state: State) -> State:
-        messages = [{"role": "system", "content": ROUTE_PROMPT.format(today=cat.today)},
+        messages = [{"role": "system", "content": ROUTE_PROMPT.format(time_rules=time_rules(cat.today))},
                     {"role": "user", "content": state["question"]}]
         call = llm.chat_json(messages)
         plan = call.parsed if not call.error else {"intent": "query"}

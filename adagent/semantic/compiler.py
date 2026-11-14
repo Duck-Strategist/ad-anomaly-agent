@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from .catalog import Catalog
-from .mql import MQL, MQLError, previous_window, resolve_window, validate_against_catalog
+from .mql import MQL, MQLError, check_data_range, previous_window, resolve_window, validate_against_catalog
 
 
 class PermissionDenied(MQLError):
@@ -264,6 +264,7 @@ def compile_mql(mql: MQL, cat: Catalog, allowed_shops: list[str], ids: IdIndex |
             raise PermissionDenied([f"no permission for shop(s): {', '.join(denied)}. "
                                     f"You can access: {', '.join(sorted(allowed_shops))}"])
     check_id_filters(mql, allowed_shops, ids)
+    check_data_range(mql, cat)
 
     start, end = resolve_window(mql.time, cat.today)
     current = _compile_window(mql, cat, sorted(allowed_shops), start, end)

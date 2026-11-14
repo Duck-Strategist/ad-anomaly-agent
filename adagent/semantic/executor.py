@@ -2,7 +2,7 @@
 
 返回统一的 dict，无论成功失败都带上 MQL / SQL，便于核对和写进 trace：
   ok=True  : rows, columns, window, previous_window, refund_incomplete, sql
-  ok=False : error_type（validation / permission / execution）, errors（写给模型看的具体原因）
+  ok=False : error_type（validation / out_of_range / permission / execution）, errors（写给模型看的具体原因）
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from ..db import allowed_shops as lookup_allowed_shops
 from ..db import reader_conn
 from .catalog import load_catalog
 from .compiler import ID_FILTERS, CompiledQuery, IdIndex, PermissionDenied, compile_mql
-from .mql import MQL, MQLError, ShopId
+from .mql import MQL, MQLError, OutOfRange, ShopId, coverage_notes
 
 # 编号 → 所属店铺的查法（以外键为准）。只有这几段固定 SQL，编号本身走参数绑定
 _ID_SOURCES = {
@@ -83,6 +83,8 @@ def query_metrics(mql: dict, user_id: str) -> dict:
         compiled = compile_mql(parsed, cat, allowed, ids)
     except PermissionDenied as e:
         return {"ok": False, "error_type": "permission", "errors": e.errors, "mql": mql}
+    except OutOfRange as e:
+        return {"ok": False, "error_type": "out_of_range", "errors": e.errors, "mql": mql}
     except MQLError as e:
         return {"ok": False, "error_type": "validation", "errors": e.errors, "mql": mql}
 
@@ -105,6 +107,9 @@ def query_metrics(mql: dict, user_id: str) -> dict:
         "window": [d.isoformat() for d in compiled.current.window],
         "previous_window": [d.isoformat() for d in compiled.previous.window] if compiled.previous else None,
         "refund_incomplete": any(q.refund_incomplete for q in queries),
+        # 实际统计的日期区间写给用户看，模型选错区间时用户能自己发现（SPEC Q19）
+        "coverage_notes": coverage_notes(*compiled.current.window, cat.data_start) + (
+            coverage_notes(*compiled.previous.window, cat.data_start, "对比的上一期") if compiled.previous else []),
         # 没指定店铺、且用户只能看部分店铺时，结果只是"有权限店铺"的数据，必须告诉用户，
         # 否则用户会把部分当成全部。这个标记由系统根据权限生成，不依赖模型自觉说明。
         "scope_limited": not parsed.filters.shop and set(allowed) != set(get_args(ShopId)),
