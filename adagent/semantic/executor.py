@@ -109,7 +109,7 @@ def query_metrics(mql: dict, user_id: str) -> dict:
         "refund_incomplete": any(q.refund_incomplete for q in queries),
         # 实际统计的日期区间写给用户看，模型选错区间时用户能自己发现（SPEC Q19）
         "coverage_notes": coverage_notes(*compiled.current.window, cat.data_start) + (
-            coverage_notes(*compiled.previous.window, cat.data_start, "对比的上一期") if compiled.previous else []),
+            coverage_notes(*compiled.previous.window, cat.data_start, "对比期") if compiled.previous else []),
         # 没指定店铺、且用户只能看部分店铺时，结果只是"有权限店铺"的数据，必须告诉用户，
         # 否则用户会把部分当成全部。这个标记由系统根据权限生成，不依赖模型自觉说明。
         "scope_limited": not parsed.filters.shop and set(allowed) != set(get_args(ShopId)),

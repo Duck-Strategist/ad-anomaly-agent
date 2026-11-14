@@ -36,14 +36,14 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class TimeSpec(_Strict):
+class Period(_Strict):
+    """一段时间：本期（TimeSpec）和指定的对比期（SPEC Q20）共用这套写法。"""
     range: RangeName
     start: date | None = None   # 仅 range=custom 时使用（店铺本地日期，含首尾）
     end: date | None = None
     # 仅 range=calendar 时使用（SPEC Q19）：自然日 / 周 / 月。offset 0 = 本期到今天为止，-1 = 上一个，-2 = 上上个
     unit: CalendarUnit | None = None
     offset: int | None = Field(default=None, ge=-12, le=0)
-    compare: Literal["previous_period"] | None = None   # 和紧挨着的上一个等长周期对比
 
     @model_validator(mode="after")
     def _fields_match_range(self):
@@ -60,6 +60,12 @@ class TimeSpec(_Strict):
         elif self.unit is not None or self.offset is not None:
             raise ValueError("unit/offset are only allowed when range=calendar")
         return self
+
+
+class TimeSpec(Period):
+    # previous_period：和上一期比。本期是自然周 / 月时取上一个周 / 月的同期，其他取紧挨着的等长前一段（SPEC Q20）
+    # Period：和指定的一段时间比，必须整段在本期之前
+    compare: Literal["previous_period"] | Period | None = None
 
 
 class Filters(_Strict):
@@ -110,6 +116,12 @@ def validate_against_catalog(mql: MQL, cat: Catalog) -> None:
     start, end = resolve_window(mql.time, cat.today)
     if end > cat.today:
         errors.append(f"time window ends after today ({cat.today}); data is only available up to today")
+    if mql.time.compare:
+        ps, pe = compare_window(mql.time, cat.today)
+        # 对比期必须整段在本期之前：写反时两期数字都在，但变化方向会说反（SPEC Q20）
+        if pe >= start:
+            errors.append(f"the comparison period {ps}~{pe} must end before the main period {start}~{end} starts. "
+                          f"Put the more recent period in time and the earlier one in compare")
     if errors:
         raise MQLError(errors)
 
@@ -122,8 +134,8 @@ def check_data_range(mql: MQL, cat: Catalog) -> None:
     out = []
     if end < cat.data_start:
         out.append(f"time window {start}~{end} is entirely before the first day of data ({cat.data_start})")
-    elif mql.time.compare and previous_window(start, end)[1] < cat.data_start:
-        ps, pe = previous_window(start, end)
+    elif mql.time.compare and compare_window(mql.time, cat.today)[1] < cat.data_start:
+        ps, pe = compare_window(mql.time, cat.today)
         out.append(f"the comparison period {ps}~{pe} is entirely before the first day of data ({cat.data_start})")
     if out:
         raise OutOfRange(out + [f"data is available from {cat.data_start} to {cat.today}. "
@@ -187,3 +199,38 @@ def previous_window(start: date, end: date) -> tuple[date, date]:
     """紧挨着的上一个等长周期。"""
     n = (end - start).days + 1
     return start - timedelta(n), start - timedelta(1)
+
+
+def _month_end(d: date) -> date:
+    return (d.replace(day=28) + timedelta(4)).replace(day=1) - timedelta(1)
+
+
+def _prev_month(d: date) -> date:
+    """上个月的同一天；对不上的日子截到上个月最后一天（3-31 → 2-28，用户 2026-11-14 决定）。"""
+    last = d.replace(day=1) - timedelta(1)
+    return last.replace(day=min(d.day, last.day))
+
+
+def _is_month_unit(t: Period, start: date, end: date) -> bool:
+    """本期按月看：calendar 按月，或 custom 恰好是一个整月（"9 月"）。
+    custom 的半个月（如 10-01~10-07）不算：用户说"和前 7 天比"时应取紧挨着的 7 天，要比上月同期就显式写对比期。"""
+    if t.range == "calendar":
+        return t.unit == "month"
+    return t.range == "custom" and start.day == 1 and end == _month_end(start)
+
+
+def compare_window(t: TimeSpec, today: date) -> tuple[date, date]:
+    """对比期（SPEC Q20）：
+    - 指定的时间段：按它的写法换算；
+    - previous_period，本期按月：上个月同期，整月对整月（10 月 → 9 月；11-01~11-08 → 10-01~10-08）；
+    - previous_period，本期是自然周（this_week / last_week / calendar 按周）：上一周同期；
+    - 其余（滚动窗口、任意日期、按天）：紧挨着的等长前一段。"""
+    if isinstance(t.compare, Period):
+        return resolve_window(t.compare, today)
+    start, end = resolve_window(t, today)
+    if _is_month_unit(t, start, end):
+        prev_end = _month_end(_prev_month(end)) if end == _month_end(end) else _prev_month(end)
+        return _prev_month(start), prev_end
+    if t.range in ("this_week", "last_week") or (t.range == "calendar" and t.unit == "week"):
+        return start - timedelta(7), end - timedelta(7)
+    return previous_window(start, end)

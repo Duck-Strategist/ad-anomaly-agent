@@ -50,14 +50,17 @@ def build_system_prompt(cat: Catalog) -> str:
 
 ## 时间
 {time_rules(cat.today)}
-- 要求和前一个等长周期对比（"和上周比""和前 7 天比""环比"）→ 在当前周期上加 "compare": "previous_period"
+- 和上一期比（"和上周比""和上个月比""和前 7 天比""环比"）→ 加 "compare": "previous_period"。
+  本期是自然周 / 自然月时，系统自动取上一周 / 上个月的同期（整月对整月；本月 1–8 日对上月 1–8 日）；其他情况取紧挨着的等长前一段
+- 和另一段指定的时间比（两段不相邻，或用户明确说了对比哪段，如"和上个月整月比"）→ "compare" 写成一段时间，写法和 time 相同。
+  time 写较近的一段，compare 写较早的一段；结果里会同时给出两段的数值和变化率
 
 ## MQL 格式
 {{
   "metrics": ["指标名", ...],                 // 1–6 个
   "dimensions": ["维度名", ...],              // 可选，最多 3 个；要"每个 / 分别 / 按…"时才用
   "filters": {{"shop": [...], "sku": [...], "ad_group": [...], "campaign": [...]}},   // 可选
-  "time": {{"range": "...", "start": "...", "end": "...", "unit": "...", "offset": 0, "compare": "previous_period"}},   // 只填所选 range 需要的字段
+  "time": {{"range": "...", "start": "...", "end": "...", "unit": "...", "offset": 0, "compare": "previous_period" 或 {{"range": "...", ...}}}},   // 只填所选 range 需要的字段
   "order_by": {{"metric": "指标名", "desc": true}},   // 可选；问"最高 / 最低 / 前几"时用，配合 limit
   "limit": 200                                // 可选
 }}
@@ -85,6 +88,9 @@ def build_system_prompt(cat: Catalog) -> str:
 
 问：昨天日本店的订单数
 答：{{"mql": {{"metrics": ["order_count"], "filters": {{"shop": ["JP"]}}, "time": {{"range": "calendar", "unit": "day", "offset": -1}}}}}}
+
+问：美国店 11 月 2 日到 4 日的点击量，和 10 月 20 日到 22 日比
+答：{{"mql": {{"metrics": ["clicks"], "filters": {{"shop": ["US"]}}, "time": {{"range": "custom", "start": "2026-11-02", "end": "2026-11-04", "compare": {{"range": "custom", "start": "2026-10-20", "end": "2026-10-22"}}}}}}}}
 
 问：美国店本周的退款率和上周比怎么样
 答：{{"mql": {{"metrics": ["refund_rate"], "filters": {{"shop": ["US"]}}, "time": {{"range": "this_week", "compare": "previous_period"}}}}}}
