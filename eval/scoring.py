@@ -50,14 +50,56 @@ def _alias_key(v) -> str:
     return str(v).strip().lower()
 
 
-def compare_any(golds: list[tuple[list[dict], dict | None]], cand_rows: list[dict]) -> tuple[bool, str]:
+def long_to_wide(rows: list[dict]) -> list[list[dict]]:
+    """两段时间对比的长表（每期一行，有一列标明是哪一期）→ 宽表（每个数值列按期拆成两列）。
+
+    期间列：取值恰好 2 种、且每组其他键（店铺、广告组……）下两期各一行的非数值列。和期间列一一对应的其他列
+    （如 period_start / period_end）一并当作期间描述。标签写法（"本期"、"2026-10"、日期……）不参与比较，
+    因为宽表 gold 的列名本来就不参与比较；两期数字放反照样判不出来，这一点和宽表相同。
+    返回所有可能的转换结果（通常 0 或 1 个）。"""
+    if not rows or len(rows) % 2:
+        return []
+    cols = list(rows[0].keys())
+    N = {c: [str(_norm(r[c])) for r in rows] for c in cols}
+    nonnum = [c for c in cols if not _is_num([_norm(r[c]) for r in rows])]
+    out = []
+    for p in nonnum:
+        labels = sorted(set(N[p]))
+        if len(labels) != 2:
+            continue
+        desc = [c for c in nonnum if len(set(N[c])) == 2 and len(set(zip(N[p], N[c]))) == 2]
+        keys = [c for c in nonnum if c not in desc]
+        groups: dict[tuple, dict[str, dict]] = {}
+        for i, r in enumerate(rows):
+            groups.setdefault(tuple(r[k] for k in keys), {})[N[p][i]] = r
+        if any(len(g) != 2 for g in groups.values()) or sum(len(g) for g in groups.values()) != len(rows):
+            continue
+        wide = []
+        for k, g in groups.items():
+            w = dict(zip(keys, k))
+            for lab in labels:
+                for c in cols:
+                    if c not in nonnum:
+                        w[f"{c}@{lab}"] = g[lab][c]
+            wide.append(w)
+        out.append(wide)
+    return out
+
+
+def compare_any(golds: list[tuple[list[dict], dict | None]], cand_rows: list[dict],
+                allow_long: bool = False) -> tuple[bool, str]:
     """一道题可以有多个可接受的标准答案（如同一组数字的宽表 / 长表写法），和其中任意一个完全对上就算对。
-    golds：[(gold_rows, key_aliases), ...]，第一个是主 gold。"""
+    golds：[(gold_rows, key_aliases), ...]，第一个是主 gold。
+    allow_long：两段时间对比题（periods: 2），候选结果是长表时先转成宽表再比（见 long_to_wide）。"""
     reasons = []
     for i, (rows, aliases) in enumerate(golds):
         ok, why = compare_results(rows, cand_rows, aliases)
         if ok:
             return True, why if i == 0 else f"{why} (alt gold {i})"
+        if allow_long:
+            for wide in long_to_wide(cand_rows):
+                if compare_results(rows, wide, aliases)[0]:
+                    return True, "match (long table)" if i == 0 else f"match (long table, alt gold {i})"
         reasons.append(why)
     return False, reasons[0] if len(reasons) == 1 else " | ".join(f"gold {i}: {r}" for i, r in enumerate(reasons))
 

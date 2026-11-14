@@ -1,0 +1,730 @@
+# M3 两段时间对比留出集（25 道）：按自然月 / 周对比 12（CP01–CP12）、任意两段 8（CP13–CP20）、对比的同时拆分 5（CP21–CP25）
+#
+# 用途：两段时间对比的修复（SPEC Q20）是看了 M2 全集里 C12、C16、C17、C18、C20 之后设计的，在原题上复测会偏高。
+#       本文件在修复代码提交之前写好 gold 并冻结；修复期间不在这些题上跑模型。修复后每题跑 3 次，报 pass^3 和单次准确率。
+# 来源：问法由 Gemini 按 eval/question_brief_compare.md 生成（原始输出 eval/question_sources/gemini_2026-11-14_compare.txt），
+#       用户挑选：25 道全部保留；6 道去掉"英镑 / 日元"（系统只按美元报告）；"涨了多少 / 差了多少"保留问法，只判两期数值。
+# 判分：gold 是宽表（每个指标本期、对比期各一列）。periods: 2 的题，候选结果是长表（每期一行）时先转成宽表再比，
+#       列名和期间标签都不参与比较（eval/scoring.py: long_to_wide）。
+#
+# 金额统一折合美元：广告侧按 stat_date 当天汇率，订单侧（含退款）按订单的店铺本地下单日汇率。
+# "今天" = 2026-11-08（周日）。本周 11-02..11-08；上周 10-26..11-01；上上周 10-19..10-25。
+# gold 由手写的 SQL 片段拼成（eval/gen_compare_holdout.py，不经编译器）；reference_mql 只给 check_reference 核对用，不给模型看。
+#
+# 审核状态：AI 起草，待人工审核
+
+
+- id: CP01
+  category: compare_period
+  source: gemini A1
+  user_id: u_admin
+  question: 9月和10月我们三家店合在一起的订单金额、扣除退款后的订单金额各是多少美元？10月比9月涨了多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND TRUE)
+    SELECT
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS gross_sales_cur,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS gross_sales_prev,
+      SUM(amt - ref) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS net_sales_cur,
+      SUM(amt - ref) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS net_sales_prev
+    FROM ol
+    WHERE d BETWEEN '2026-09-01' AND '2026-10-31'
+  reference_mql: {metrics: [gross_sales, net_sales], time: {range: custom, start: '2026-10-01', end: '2026-10-31', compare: previous_period}}
+
+- id: CP02
+  category: compare_period
+  source: gemini A2
+  user_id: u_ops_us
+  question: 帮我拉一下美国店上个月和上上个月的广告花费、广告带来的销售额还有ACOS分别是多少，看看上个月ACOS是变好了还是变差了。
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE c.shop_id = 'US')
+    SELECT
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS ad_spend_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS ad_spend_prev,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS ad_sales_cur,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS ad_sales_prev,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') / SUM(sales) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS acos_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') / SUM(sales) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS acos_prev
+    FROM ad
+    WHERE d BETWEEN '2026-09-01' AND '2026-10-31'
+  reference_mql: {metrics: [ad_spend, ad_sales, acos], filters: {shop: [US]}, time: {range: calendar, unit: month, offset: -1, compare: previous_period}}
+
+- id: CP03
+  category: compare_period
+  source: gemini A3
+  user_id: u_ops_uk
+  question: 那个，我是新来对账的助理，想问下英国店这个月到今天为止，跟上个月同期前8天（10月1号到8号）比，订单数和退款金额各是多少呀？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND o.shop_id = 'UK')
+    SELECT
+      COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') AS order_count_cur,
+      COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-08') AS order_count_prev,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') AS refund_amount_cur,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-08') AS refund_amount_prev
+    FROM ol
+    WHERE d BETWEEN '2026-10-01' AND '2026-11-08'
+  reference_mql: {metrics: [order_count, refund_amount], filters: {shop: [UK]}, time: {range: calendar, unit: month, offset: 0, compare: previous_period}}
+  rewrite: 去掉“英镑”（系统只按美元报告，同 TH08）
+
+- id: CP04
+  category: compare_period
+  source: gemini A4
+  user_id: u_admin
+  question: 日本店11月到现在累计的订单金额是多少？跟上个月整月（10月全月）的订单金额比还差多少？两段时间的数都发我看看。
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND o.shop_id = 'JP')
+    SELECT
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') AS gross_sales_cur,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS gross_sales_prev
+    FROM ol
+    WHERE d BETWEEN '2026-10-01' AND '2026-11-08'
+  reference_mql: {metrics: [gross_sales], filters: {shop: [JP]}, time: {range: calendar, unit: month, offset: 0, compare: {range: calendar, unit: month, offset: -1}}}
+  rewrite: 去掉“日元”（同上）
+
+- id: CP05
+  category: compare_period
+  source: gemini A5
+  user_id: u_ops_us
+  question: 查下US-SKU05这个品，上周和这周的点击率、转化率、单次点击花费各是多少？这周比上周变好了吗？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE g.sku_id = 'US-SKU05')
+    SELECT
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08')::numeric / SUM(impressions) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS ctr_cur,
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01')::numeric / SUM(impressions) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS ctr_prev,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08')::numeric / SUM(clicks) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS cvr_cur,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01')::numeric / SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS cvr_prev,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') / SUM(clicks) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS cpc_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') / SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS cpc_prev
+    FROM ad
+    WHERE d BETWEEN '2026-10-26' AND '2026-11-08'
+  reference_mql: {metrics: [ctr, cvr, cpc], filters: {sku: [US-SKU05]}, time: {range: this_week, compare: previous_period}}
+
+- id: CP06
+  category: compare_period
+  source: gemini A6
+  user_id: u_ops_uk
+  question: 英国店UK-C2这个广告活动，上周跟上上周比，曝光、点击和广告带来的订单数分别是多少？上周比上上周掉了多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE g.campaign_id = 'UK-C2')
+    SELECT
+      SUM(impressions) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS impressions_cur,
+      SUM(impressions) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') AS impressions_prev,
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS clicks_cur,
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') AS clicks_prev,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS ad_orders_cur,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') AS ad_orders_prev
+    FROM ad
+    WHERE d BETWEEN '2026-10-19' AND '2026-11-01'
+  reference_mql: {metrics: [impressions, clicks, ad_orders], filters: {campaign: [UK-C2]}, time: {range: last_week, compare: previous_period}}
+
+- id: CP07
+  category: compare_period
+  source: gemini A7
+  user_id: u_admin
+  question: 把这周（11月2号到今天）和上周三家店总的广告花费、广告带来的销售额（都按美元算）以及整体ROAS调出来对比下，看下两周各是多少。
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE TRUE)
+    SELECT
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS ad_spend_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS ad_spend_prev,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS ad_sales_cur,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS ad_sales_prev,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') / SUM(spend) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS roas_cur,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') / SUM(spend) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS roas_prev
+    FROM ad
+    WHERE d BETWEEN '2026-10-26' AND '2026-11-08'
+  reference_mql: {metrics: [ad_spend, ad_sales, roas], time: {range: this_week, compare: previous_period}}
+
+- id: CP08
+  category: compare_period
+  source: gemini A8
+  user_id: u_ops_us
+  question: 请问一下，美国店这个月1号到今天这8天，和10月整月比的话，全店的客单价和退款率在两段时间里分别是多少呀？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND o.shop_id = 'US')
+    SELECT
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') / COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') AS aov_cur,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') / COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS aov_prev,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') / SUM(amt) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') AS refund_rate_cur,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') / SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS refund_rate_prev
+    FROM ol
+    WHERE d BETWEEN '2026-10-01' AND '2026-11-08'
+  reference_mql: {metrics: [aov, refund_rate], filters: {shop: [US]}, time: {range: calendar, unit: month, offset: 0, compare: {range: custom, start: '2026-10-01', end: '2026-10-31'}}}
+
+- id: CP09
+  category: compare_period
+  source: gemini A9
+  user_id: u_admin
+  question: 11月到今天为止这8天，跟上个月的同样前8天（10月1日到8日）比，英国店和日本店加起来折合美元后的扣除退款后的订单金额各是多少？涨了还是跌了？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND o.shop_id IN ('UK', 'JP'))
+    SELECT
+      SUM(amt - ref) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') AS net_sales_cur,
+      SUM(amt - ref) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-08') AS net_sales_prev
+    FROM ol
+    WHERE d BETWEEN '2026-10-01' AND '2026-11-08'
+  reference_mql: {metrics: [net_sales], filters: {shop: [UK, JP]}, time: {range: calendar, unit: month, offset: 0, compare: previous_period}}
+
+- id: CP10
+  category: compare_period
+  source: gemini A10
+  user_id: u_ops_uk
+  question: 帮我看下UK-AG03广告组，9月第一个完整自然周（9月7号到13号）和10月第一个完整自然周（10月5号到11号）的ACOS、ROAS各是多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE s.ad_group_id = 'UK-AG03')
+    SELECT
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-05' AND '2026-10-11') / SUM(sales) FILTER (WHERE d BETWEEN '2026-10-05' AND '2026-10-11') AS acos_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-09-07' AND '2026-09-13') / SUM(sales) FILTER (WHERE d BETWEEN '2026-09-07' AND '2026-09-13') AS acos_prev,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-05' AND '2026-10-11') / SUM(spend) FILTER (WHERE d BETWEEN '2026-10-05' AND '2026-10-11') AS roas_cur,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-09-07' AND '2026-09-13') / SUM(spend) FILTER (WHERE d BETWEEN '2026-09-07' AND '2026-09-13') AS roas_prev
+    FROM ad
+    WHERE d BETWEEN '2026-09-07' AND '2026-10-11'
+  reference_mql: {metrics: [acos, roas], filters: {ad_group: [UK-AG03]}, time: {range: custom, start: '2026-10-05', end: '2026-10-11', compare: {range: custom, start: '2026-09-07', end: '2026-09-13'}}}
+
+- id: CP11
+  category: compare_period
+  source: gemini A11
+  user_id: u_ops_us
+  question: 美国店US-SKU12在9月整月和10月整月的订单数、订单金额、退款金额各是多少美元？10月比9月涨了多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND oi.sku_id = 'US-SKU12')
+    SELECT
+      COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS order_count_cur,
+      COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS order_count_prev,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS gross_sales_cur,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS gross_sales_prev,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS refund_amount_cur,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS refund_amount_prev
+    FROM ol
+    WHERE d BETWEEN '2026-09-01' AND '2026-10-31'
+  reference_mql: {metrics: [order_count, gross_sales, refund_amount], filters: {sku: [US-SKU12]}, time: {range: custom, start: '2026-10-01', end: '2026-10-31', compare: previous_period}}
+
+- id: CP12
+  category: compare_period
+  source: gemini A12
+  user_id: u_admin
+  question: 上上周（10月19号到25号）和这周（11月2号到8号），日本店JP-C1广告活动的广告花费和广告带来的销售额分别是多少？这周比上上周多了多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE g.campaign_id = 'JP-C1')
+    SELECT
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS ad_spend_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') AS ad_spend_prev,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS ad_sales_cur,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') AS ad_sales_prev
+    FROM ad
+    WHERE d BETWEEN '2026-10-19' AND '2026-11-08'
+  reference_mql: {metrics: [ad_spend, ad_sales], filters: {campaign: [JP-C1]}, time: {range: this_week, compare: {range: calendar, unit: week, offset: -2}}}
+  rewrite: 去掉“日元”（同上）
+
+- id: CP13
+  category: compare_period
+  source: gemini B1
+  user_id: u_admin
+  question: 10月上半月（10月1号到15号）和9月上半月（9月1号到15号），三家店汇总折合美元的订单金额、退款率各是多少？10月上半月表现变好还是变差了？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND TRUE)
+    SELECT
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-15') AS gross_sales_cur,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-15') AS gross_sales_prev,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-15') / SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-15') AS refund_rate_cur,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-15') / SUM(amt) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-15') AS refund_rate_prev
+    FROM ol
+    WHERE d BETWEEN '2026-09-01' AND '2026-10-15'
+  reference_mql: {metrics: [gross_sales, refund_rate], time: {range: custom, start: '2026-10-01', end: '2026-10-15', compare: {range: custom, start: '2026-09-01', end: '2026-09-15'}}}
+
+- id: CP14
+  category: compare_period
+  source: gemini B2
+  user_id: u_ops_us
+  question: 国庆黄金周那7天（10月1号到7号）跟它前面紧挨着的7天（9月24号到30号）比，美国店全店的广告花费、广告带来的订单数分别是多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE c.shop_id = 'US')
+    SELECT
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-07') AS ad_spend_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-09-24' AND '2026-09-30') AS ad_spend_prev,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-07') AS ad_orders_cur,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-09-24' AND '2026-09-30') AS ad_orders_prev
+    FROM ad
+    WHERE d BETWEEN '2026-09-24' AND '2026-10-07'
+  reference_mql: {metrics: [ad_spend, ad_orders], filters: {shop: [US]}, time: {range: custom, start: '2026-10-01', end: '2026-10-07', compare: previous_period}}
+
+- id: CP15
+  category: compare_period
+  source: gemini B3
+  user_id: u_ops_uk
+  question: 麻烦查一下英国店8月15号到8月31号这17天，和10月下半月（10月16号到10月31号）这16天，扣除退款后的订单金额和客单价各是多少？差了多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND o.shop_id = 'UK')
+    SELECT
+      SUM(amt - ref) FILTER (WHERE d BETWEEN '2026-10-16' AND '2026-10-31') AS net_sales_cur,
+      SUM(amt - ref) FILTER (WHERE d BETWEEN '2026-08-15' AND '2026-08-31') AS net_sales_prev,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-10-16' AND '2026-10-31') / COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-10-16' AND '2026-10-31') AS aov_cur,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-08-15' AND '2026-08-31') / COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-08-15' AND '2026-08-31') AS aov_prev
+    FROM ol
+    WHERE d BETWEEN '2026-08-15' AND '2026-10-31'
+  reference_mql: {metrics: [net_sales, aov], filters: {shop: [UK]}, time: {range: custom, start: '2026-10-16', end: '2026-10-31', compare: {range: custom, start: '2026-08-15', end: '2026-08-31'}}}
+  rewrite: 去掉“英镑”（同上）
+
+- id: CP16
+  category: compare_period
+  source: gemini B4
+  user_id: u_ops_us
+  question: 10月13号到14号那两天会员日大促，跟大促前5天（10月8号到12号）比，美国店US-C1广告活动的曝光、点击率和单次点击花费各是多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE g.campaign_id = 'US-C1')
+    SELECT
+      SUM(impressions) FILTER (WHERE d BETWEEN '2026-10-13' AND '2026-10-14') AS impressions_cur,
+      SUM(impressions) FILTER (WHERE d BETWEEN '2026-10-08' AND '2026-10-12') AS impressions_prev,
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-13' AND '2026-10-14')::numeric / SUM(impressions) FILTER (WHERE d BETWEEN '2026-10-13' AND '2026-10-14') AS ctr_cur,
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-08' AND '2026-10-12')::numeric / SUM(impressions) FILTER (WHERE d BETWEEN '2026-10-08' AND '2026-10-12') AS ctr_prev,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-13' AND '2026-10-14') / SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-13' AND '2026-10-14') AS cpc_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-08' AND '2026-10-12') / SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-08' AND '2026-10-12') AS cpc_prev
+    FROM ad
+    WHERE d BETWEEN '2026-10-08' AND '2026-10-14'
+  reference_mql: {metrics: [impressions, ctr, cpc], filters: {campaign: [US-C1]}, time: {range: custom, start: '2026-10-13', end: '2026-10-14', compare: {range: custom, start: '2026-10-08', end: '2026-10-12'}}}
+
+- id: CP17
+  category: compare_period
+  source: gemini B5
+  user_id: u_admin
+  question: 帮我算下日本店在8月11号到8月20号这10天，还有10月21号到10月30号这10天，全店的订单数和广告带来的销售额各是多少，涨了多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    SELECT o.*, a.*
+    FROM (
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND o.shop_id = 'JP')
+    SELECT
+      COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-10-21' AND '2026-10-30') AS order_count_cur,
+      COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-08-11' AND '2026-08-20') AS order_count_prev
+    FROM ol
+    WHERE d BETWEEN '2026-08-11' AND '2026-10-30'
+    ) o
+    CROSS JOIN (
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE c.shop_id = 'JP')
+    SELECT
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-21' AND '2026-10-30') AS ad_sales_cur,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-08-11' AND '2026-08-20') AS ad_sales_prev
+    FROM ad
+    WHERE d BETWEEN '2026-08-11' AND '2026-10-30'
+    ) a
+  reference_mql: {metrics: [order_count, ad_sales], filters: {shop: [JP]}, time: {range: custom, start: '2026-10-21', end: '2026-10-30', compare: {range: custom, start: '2026-08-11', end: '2026-08-20'}}}
+  rewrite: 去掉“日元”（同上）
+
+- id: CP18
+  category: compare_period
+  source: gemini B6
+  user_id: u_ops_uk
+  question: 刚接手表格不太熟，想问下UK-SKU08在10月下旬（10月21号到31号）和9月下旬（9月21号到30号）的转化率、ACOS分别是多少呀？变好了还是变差了？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE g.sku_id = 'UK-SKU08')
+    SELECT
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-10-21' AND '2026-10-31')::numeric / SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-21' AND '2026-10-31') AS cvr_cur,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-09-21' AND '2026-09-30')::numeric / SUM(clicks) FILTER (WHERE d BETWEEN '2026-09-21' AND '2026-09-30') AS cvr_prev,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-21' AND '2026-10-31') / SUM(sales) FILTER (WHERE d BETWEEN '2026-10-21' AND '2026-10-31') AS acos_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-09-21' AND '2026-09-30') / SUM(sales) FILTER (WHERE d BETWEEN '2026-09-21' AND '2026-09-30') AS acos_prev
+    FROM ad
+    WHERE d BETWEEN '2026-09-21' AND '2026-10-31'
+  reference_mql: {metrics: [cvr, acos], filters: {sku: [UK-SKU08]}, time: {range: custom, start: '2026-10-21', end: '2026-10-31', compare: {range: custom, start: '2026-09-21', end: '2026-09-30'}}}
+
+- id: CP19
+  category: compare_period
+  source: gemini B7
+  user_id: u_ops_us
+  question: 帮我看下US-AG01这个广告组，最近5天（11月4号到11月8号）和再往前推5天（10月30号到11月3号）的点击、广告花费和ROAS各是多少，ROAS变好了没？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE s.ad_group_id = 'US-AG01')
+    SELECT
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-11-04' AND '2026-11-08') AS clicks_cur,
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-30' AND '2026-11-03') AS clicks_prev,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-11-04' AND '2026-11-08') AS ad_spend_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-30' AND '2026-11-03') AS ad_spend_prev,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-11-04' AND '2026-11-08') / SUM(spend) FILTER (WHERE d BETWEEN '2026-11-04' AND '2026-11-08') AS roas_cur,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-30' AND '2026-11-03') / SUM(spend) FILTER (WHERE d BETWEEN '2026-10-30' AND '2026-11-03') AS roas_prev
+    FROM ad
+    WHERE d BETWEEN '2026-10-30' AND '2026-11-08'
+  reference_mql: {metrics: [clicks, ad_spend, roas], filters: {ad_group: [US-AG01]}, time: {range: custom, start: '2026-11-04', end: '2026-11-08', compare: previous_period}}
+
+- id: CP20
+  category: compare_period
+  source: gemini B8
+  user_id: u_admin
+  question: 9月10号到9月25号这16天，跟10月10号到10月22号这13天比，美国店和英国店合起来折成美元的退款金额、退款率各是多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND o.shop_id IN ('US', 'UK'))
+    SELECT
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-10-10' AND '2026-10-22') AS refund_amount_cur,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-09-10' AND '2026-09-25') AS refund_amount_prev,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-10-10' AND '2026-10-22') / SUM(amt) FILTER (WHERE d BETWEEN '2026-10-10' AND '2026-10-22') AS refund_rate_cur,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-09-10' AND '2026-09-25') / SUM(amt) FILTER (WHERE d BETWEEN '2026-09-10' AND '2026-09-25') AS refund_rate_prev
+    FROM ol
+    WHERE d BETWEEN '2026-09-10' AND '2026-10-22'
+  reference_mql: {metrics: [refund_amount, refund_rate], filters: {shop: [US, UK]}, time: {range: custom, start: '2026-10-10', end: '2026-10-22', compare: {range: custom, start: '2026-09-10', end: '2026-09-25'}}}
+
+- id: CP21
+  category: compare_period
+  source: gemini C1
+  user_id: u_admin
+  question: 9月和10月比，美国、英国、日本三家店各自的订单金额、扣除退款后的订单金额（统一折算成美元）分别是多少？每家店10月比9月涨了多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND TRUE)
+    SELECT
+      shop_id,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS gross_sales_cur,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS gross_sales_prev,
+      SUM(amt - ref) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-31') AS net_sales_cur,
+      SUM(amt - ref) FILTER (WHERE d BETWEEN '2026-09-01' AND '2026-09-30') AS net_sales_prev
+    FROM ol
+    WHERE d BETWEEN '2026-09-01' AND '2026-10-31'
+    GROUP BY shop_id
+  reference_mql: {metrics: [gross_sales, net_sales], dimensions: [shop], time: {range: custom, start: '2026-10-01', end: '2026-10-31', compare: previous_period}}
+
+- id: CP22
+  category: compare_period
+  source: gemini C2
+  user_id: u_ops_us
+  question: 上周和上上周比，美国店每个广告组（US-AG01到US-AG10）各自的广告花费、ACOS和ROAS分别是多少？哪些广告组的ACOS变差了？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE c.shop_id = 'US')
+    SELECT
+      ad_group_id,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS ad_spend_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') AS ad_spend_prev,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') / SUM(sales) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS acos_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') / SUM(sales) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') AS acos_prev,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') / SUM(spend) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS roas_cur,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') / SUM(spend) FILTER (WHERE d BETWEEN '2026-10-19' AND '2026-10-25') AS roas_prev
+    FROM ad
+    WHERE d BETWEEN '2026-10-19' AND '2026-11-01'
+    GROUP BY ad_group_id
+  reference_mql: {metrics: [ad_spend, acos, roas], dimensions: [ad_group], filters: {shop: [US]}, time: {range: last_week, compare: previous_period}}
+
+- id: CP23
+  category: compare_period
+  source: gemini C3
+  user_id: u_ops_uk
+  question: 帮我拉一下英国店这周（11月2号到8号）跟上周（10月26号到11月1号）比，三个广告活动（UK-C1到UK-C3）各自的曝光、点击率、广告带来的销售额分别是多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE c.shop_id = 'UK')
+    SELECT
+      campaign_id,
+      SUM(impressions) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS impressions_cur,
+      SUM(impressions) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS impressions_prev,
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08')::numeric / SUM(impressions) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS ctr_cur,
+      SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01')::numeric / SUM(impressions) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS ctr_prev,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-11-02' AND '2026-11-08') AS ad_sales_cur,
+      SUM(sales) FILTER (WHERE d BETWEEN '2026-10-26' AND '2026-11-01') AS ad_sales_prev
+    FROM ad
+    WHERE d BETWEEN '2026-10-26' AND '2026-11-08'
+    GROUP BY campaign_id
+  reference_mql: {metrics: [impressions, ctr, ad_sales], dimensions: [campaign], filters: {shop: [UK]}, time: {range: this_week, compare: previous_period}}
+  rewrite: 去掉“英镑”（同上）
+
+- id: CP24
+  category: compare_period
+  source: gemini C4
+  user_id: u_admin
+  question: 11月1号到今天这8天，跟10月前8天（10月1号到8号）比，日本店两个广告活动JP-C1和JP-C2各自的广告带来的订单数、单次点击花费、转化率各是多少？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ad AS (
+      SELECT c.shop_id, g.campaign_id, s.ad_group_id, g.sku_id, s.stat_date AS d,
+             s.spend * fx.rate_to_usd AS spend, s.ad_sales * fx.rate_to_usd AS sales,
+             s.impressions, s.clicks, s.ad_orders
+      FROM ad_daily_stats s
+      JOIN ad_groups g ON g.ad_group_id = s.ad_group_id
+      JOIN ad_campaigns c ON c.campaign_id = g.campaign_id
+      JOIN shops sh ON sh.shop_id = c.shop_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = s.stat_date
+      WHERE c.shop_id = 'JP')
+    SELECT
+      campaign_id,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') AS ad_orders_cur,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-08') AS ad_orders_prev,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') / SUM(clicks) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') AS cpc_cur,
+      SUM(spend) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-08') / SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-08') AS cpc_prev,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08')::numeric / SUM(clicks) FILTER (WHERE d BETWEEN '2026-11-01' AND '2026-11-08') AS cvr_cur,
+      SUM(ad_orders) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-08')::numeric / SUM(clicks) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-08') AS cvr_prev
+    FROM ad
+    WHERE d BETWEEN '2026-10-01' AND '2026-11-08'
+    GROUP BY campaign_id
+  reference_mql: {metrics: [ad_orders, cpc, cvr], dimensions: [campaign], filters: {shop: [JP]}, time: {range: calendar, unit: month, offset: 0, compare: previous_period}}
+
+- id: CP25
+  category: compare_period
+  source: gemini C5
+  user_id: u_ops_us
+  question: 请教下，主管让我填周报，美国店投了广告的那10个商品（US-SKU01到US-SKU10），在10月上半月（10月1号到15号）和10月下半月（10月16号到31号）各自的订单数、客单价和退款率分别是多少，能按每个商品拆开列一下吗？
+  expect: rows
+  periods: 2
+  gold_sql: |
+    WITH ol AS (
+      SELECT o.shop_id, o.order_id, oi.sku_id, (o.created_at AT TIME ZONE sh.timezone)::date AS d,
+             oi.qty * oi.unit_price * fx.rate_to_usd AS amt,
+             (SELECT COALESCE(SUM(r.amount), 0) FROM refunds r WHERE r.item_id = oi.item_id) * fx.rate_to_usd AS ref
+      FROM orders o
+      JOIN shops sh ON sh.shop_id = o.shop_id
+      JOIN order_items oi ON oi.order_id = o.order_id
+      JOIN fx_rates fx ON fx.currency = sh.currency AND fx.rate_date = (o.created_at AT TIME ZONE sh.timezone)::date
+      WHERE o.deleted_at IS NULL AND oi.sku_id IN ('US-SKU01', 'US-SKU02', 'US-SKU03', 'US-SKU04', 'US-SKU05', 'US-SKU06', 'US-SKU07', 'US-SKU08', 'US-SKU09', 'US-SKU10'))
+    SELECT
+      sku_id,
+      COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-10-16' AND '2026-10-31') AS order_count_cur,
+      COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-15') AS order_count_prev,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-10-16' AND '2026-10-31') / COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-10-16' AND '2026-10-31') AS aov_cur,
+      SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-15') / COUNT(DISTINCT order_id) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-15') AS aov_prev,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-10-16' AND '2026-10-31') / SUM(amt) FILTER (WHERE d BETWEEN '2026-10-16' AND '2026-10-31') AS refund_rate_cur,
+      SUM(ref) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-15') / SUM(amt) FILTER (WHERE d BETWEEN '2026-10-01' AND '2026-10-15') AS refund_rate_prev
+    FROM ol
+    WHERE d BETWEEN '2026-10-01' AND '2026-10-31'
+    GROUP BY sku_id
+  reference_mql: {metrics: [order_count, aov, refund_rate], dimensions: [sku], filters: {sku: [US-SKU01, US-SKU02, US-SKU03, US-SKU04, US-SKU05, US-SKU06, US-SKU07, US-SKU08, US-SKU09, US-SKU10]}, time: {range: custom, start: '2026-10-16', end: '2026-10-31', compare: {range: custom, start: '2026-10-01', end: '2026-10-15'}}}

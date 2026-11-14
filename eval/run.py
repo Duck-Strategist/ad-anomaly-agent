@@ -33,7 +33,7 @@ from eval.workflow_eval import run_ambiguity, run_attribution, run_attribution_b
 ROOT = Path(__file__).resolve().parent
 SYSTEMS = {"ours": ours, "baseline": baseline}
 WORKFLOW_CATEGORIES = ("ambiguity", "attribution")
-COVERAGE_PREFIXES = ("统计区间", "对比的上一期")
+COVERAGE_PREFIXES = ("统计区间", "对比的上一期", "对比期")
 
 
 def score(q: dict, a: Answer, golds: list | None) -> tuple[bool, str]:
@@ -56,7 +56,7 @@ def score(q: dict, a: Answer, golds: list | None) -> tuple[bool, str]:
         return False, f"expected no data, got {a.status}: {str(a.rows)[:120]}"
     if a.status != "rows":
         return False, f"{a.status}: {a.message[:120]}"
-    return compare_any(golds, a.rows)
+    return compare_any(golds, a.rows, allow_long=q.get("periods") == 2)
 
 
 def _jsonable(v):
@@ -167,7 +167,7 @@ def main() -> None:
         by_cat[r["category"]].append(r)
     print(f"\n{args.system} / {args.model}  ({len(results)} questions)  → {out.relative_to(ROOT.parent)}")
     print(f"{'category':12s} {'pass':>9s} {'first-try':>10s}")
-    for cat in ["single", "compare", "trap", "permission", "time", "time_partial", "time_no_data"]:
+    for cat in ["single", "compare", "trap", "permission", "time", "time_partial", "time_no_data", "compare_period"]:
         rs = by_cat.get(cat, [])
         if rs:
             print(f"{cat:12s} {sum(r['pass'] for r in rs):>4d}/{len(rs):<4d} {sum(r['first_try'] for r in rs):>5d}/{len(rs):<4d}")
