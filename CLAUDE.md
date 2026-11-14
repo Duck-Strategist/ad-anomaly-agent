@@ -54,7 +54,7 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 | `eval/` | 评测题、评分器、基线（Text-to-SQL）、运行器；`eval/ground_truth/events.json` 是事件真值，只给评测用 |
 | `tests/` | 权限、编译器、评分器、分解算法的测试 |
 
-## 当前进度（2026-11-13）
+## 当前进度（2026-11-14）
 
 - **M1 完成**：数据层、语义层、编译器、NL→MQL、Text-to-SQL 基线、40 道评测题（陷阱题和越权题已人工审核）。
 - **M2 完成（2026-11-13）**：全集正式评测数字见 RESULTS 顶部"M2 全集正式评测"一节（简历用这一节）。查询类本方案 / DeepSeek 93.9%（基线 98.5%，差在 4 道 MQL 表达不了的月度对比），首次即对 93.9% vs 69.7%；跨模型稳定性目标未达标（相差 7.5 个百分点）；归因 pass^3 25/25（ReAct 基线 14/25）。
@@ -64,5 +64,6 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 - **M2 评测题齐了（111 道）**：M1 40 + 查询 36 + 歧义 10（另有留出集 9）+ 归因 25。运行器 `eval/workflow_eval.py` 让歧义 / 归因题走完整工作流（歧义两步判分、归因每题 3 次算 pass^3），评测 thread_id 以 `eval-` 开头。实测数字见 RESULTS：歧义留出集 9/9，归因 pass^3 25/25（都在通用修复之后，修复前的数字也记录了）。
 - **归因**：店铺不显著时下钻（Bonferroni 校正门槛）；路由时间段由代码检查数据范围；"没有数据"不等于"没有下滑"（SPEC Q18）。
 - 评测工具：`eval/run.py`（查询 / 歧义 / 归因，含 ReAct 基线 `eval/baseline_react.py`）、`eval/summarize.py`（合并多次运行出表）、`eval/rescore.py`（修正 gold 后用已存结果重判，不重跑模型）。
-- **下一步（M3）**：查询分支补时间范围检查和相对时间的代码解析（跨模型稳定性未达标的主因）、MQL 支持自然月 / 指定两段时间对比、LLM judge 校准（解释分）、极简前端、Docker Compose、Langfuse、README / 演示脚本。
+- **M3 相对时间已完成（2026-11-14，SPEC Q19）**：MQL 增加 `calendar`，日期由代码换算；时间范围检查；回答写出统计区间。留出集 25 题（`eval/questions/m3_time_holdout.yaml`）本方案 DeepSeek 23/25、千问 24/25；原 76 题上跨模型仍相差 7.6 个百分点，未达标（见 RESULTS 顶部）。
+- **下一步（M3）**：MQL 支持自然月 / 指定两段时间对比、LLM judge 校准（解释分）、极简前端、Docker Compose、Langfuse、README / 演示脚本。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点）。
