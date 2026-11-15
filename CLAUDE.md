@@ -65,5 +65,6 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 - **归因**：店铺不显著时下钻（Bonferroni 校正门槛）；路由时间段由代码检查数据范围；"没有数据"不等于"没有下滑"（SPEC Q18）。
 - 评测工具：`eval/run.py`（查询 / 歧义 / 归因，含 ReAct 基线 `eval/baseline_react.py`）、`eval/summarize.py`（合并多次运行出表）、`eval/rescore.py`（修正 gold 后用已存结果重判，不重跑模型）。
 - **M3 相对时间已完成（2026-11-14，SPEC Q19）**：MQL 增加 `calendar`，日期由代码换算；时间范围检查；回答写出统计区间。留出集 25 题（`eval/questions/m3_time_holdout.yaml`）本方案 DeepSeek 23/25、千问 24/25；原 76 题上跨模型仍相差 7.6 个百分点，未达标（见 RESULTS 顶部）。
-- **下一步（M3）**：MQL 支持自然月 / 指定两段时间对比、LLM judge 校准（解释分）、极简前端、Docker Compose、Langfuse、README / 演示脚本。
+- **M3 两段时间对比已完成（2026-11-14，SPEC Q20）**：`compare` 可写成一段时间且必须在本期之前；自然周 / 月的 `previous_period` 取同期。留出集 25 题 × 3 次（`eval/questions/m3_compare_holdout.yaml`），本方案两个模型 pass^3 都是 25/25；原 76 题上跨模型差距 3.0 个百分点（原题偏高，见 RESULTS 顶部）。
+- **下一步（M3）**：LLM judge 校准（解释分）、极简前端、Docker Compose、Langfuse、README / 演示脚本。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点）。
