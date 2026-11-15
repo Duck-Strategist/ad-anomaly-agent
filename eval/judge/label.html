@@ -31,6 +31,12 @@
   nav button { padding:2px 7px; font-size:12px; }
   nav button.done { border-color:var(--yes); }
   nav button.cur { outline:2px solid var(--accent); }
+  .num { border-radius:3px; padding:0 2px; cursor:help; }
+  .num.hit { background:color-mix(in srgb, var(--yes) 22%, transparent); }
+  .num.miss { background:#f2d24b66; outline:1px solid #c9a20f; }
+  .num.skip { color:var(--muted); }
+  .legend { margin-top:8px; font-size:12px; color:var(--muted); }
+  .legend .num { cursor:default; }
 </style>
 </head>
 <body>
@@ -52,7 +58,10 @@
       <div class="card"><h3>依据（工具结果 / 代码生成的结论段）</h3><pre id="evidence"></pre></div>
       <div>
         <div class="card" style="margin-bottom:16px"><h3>结构化结论</h3><div id="conclusion"></div></div>
-        <div class="card" style="margin-bottom:16px"><h3>待评文字</h3><div id="text" class="text"></div></div>
+        <div class="card" style="margin-bottom:16px"><h3>待评文字</h3><div id="text" class="text"></div>
+          <div class="legend">查数字辅助（只做查找，不下结论）：<span class="num hit">绿</span> 依据里有这个数（按它的小数位四舍五入后相同，百分比也换算比较；悬停看出处）；
+            <span class="num miss">黄</span> 依据里找不到，可能记错了，也可能是它自己算的，需要你判断；<span class="num skip">灰</span> 编号 / 日期，未检查。
+            不检查文字里的原因和事实，那部分仍要通读。</div></div>
         <div class="card">
           <div class="q"><span>R1 建议和结论一致</span><button data-k="r1" data-v="true" class="yes">是</button><button data-k="r1" data-v="false" class="no">否</button></div>
           <div class="q"><span>R2 没有编造依据里没有的事实</span><button data-k="r2" data-v="true" class="yes">是</button><button data-k="r2" data-v="false" class="no">否</button></div>
@@ -88,7 +97,7 @@ function render() {
   $("question").textContent = it.question;
   $("evidence").textContent = it.evidence;
   $("conclusion").textContent = it.conclusion;
-  $("text").textContent = it.text;
+  $("text").innerHTML = markNumbers(it.text, evidenceNumbers(it.evidence));
   $("note").value = l.note || "";
   document.querySelectorAll(".q button[data-k]").forEach(b => b.classList.toggle("on", l[b.dataset.k] === (b.dataset.v === "true")));
   $("nav").innerHTML = "";
@@ -99,6 +108,51 @@ function render() {
     $("nav").appendChild(b);
   });
   $("progress").textContent = `已完成 ${items.filter(x => done(x.id)).length}/${items.length}`;
+}
+
+// ---------- 查数字辅助 ----------
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function evidenceNumbers(ev) {
+  // 依据里的每个数 → {value, where}。JSON 依据取字段名，文本依据取前面一小段上下文
+  const out = [], re = /-?\d+(?:\.\d+)?/g;
+  let m;
+  while ((m = re.exec(ev))) {
+    const before = ev.slice(0, m.index);
+    const q = (before.match(/查询 (\d+) 的结果/g) || []).pop();
+    const key = (before.slice(-60).match(/"(\w+)":\s*$/) || [])[1];
+    const where = key ? `${q ? q.replace(" 的结果", "") + " · " : ""}${key} = ${m[0]}`
+                      : `…${ev.slice(Math.max(0, m.index - 14), m.index + m[0].length + 4).replace(/\s+/g, " ")}…`;
+    out.push({ value: Math.abs(parseFloat(m[0])), where });
+  }
+  return out;
+}
+
+function findSource(token, pct, evNums) {
+  // token 有几位小数，就把依据里的数四舍五入到几位再比；带 % 时也试 ×100（比率 0.0955 → 9.55%）
+  const v = Math.abs(parseFloat(token)), d = (token.split(".")[1] || "").length, tol = 0.5 * 10 ** -d + 1e-9;
+  for (const e of evNums) {
+    if (Math.abs(e.value - v) <= tol) return e.where;
+    if (pct && Math.abs(e.value * 100 - v) <= tol) return e.where + "（×100）";
+  }
+  return null;
+}
+
+function markNumbers(text, evNums) {
+  const re = /([A-Z]{2}-(?:AG|SKU)\d+)|(\d{4}-\d{1,2}-\d{1,2})|(\d{1,2}\/\d{1,2})|(\d{1,2}月\d{1,2}[日号]?)|(\d{1,2}[日号])|(\d+(?:\.\d+)?)(%?)/g;
+  let html = "", last = 0, m;
+  while ((m = re.exec(text))) {
+    html += esc(text.slice(last, m.index));
+    if (m[6] === undefined) {
+      html += `<span class="num skip" title="编号或日期，未检查">${esc(m[0])}</span>`;
+    } else {
+      const src = findSource(m[6], m[7] === "%", evNums);
+      html += src ? `<span class="num hit" title="依据里有：${esc(src)}">${esc(m[0])}</span>`
+                  : `<span class="num miss" title="依据里找不到这个数">${esc(m[0])}</span>`;
+    }
+    last = re.lastIndex;
+  }
+  return html + esc(text.slice(last));
 }
 
 function set(k, v) {
