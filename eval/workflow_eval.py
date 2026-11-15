@@ -110,7 +110,10 @@ def run_attribution(q: dict, graph_factory: Callable[[], object], runs: int = AT
         ok, why = score_conclusion(q["expect_conclusion"], st.get("conclusion"))
         results.append({"thread_id": tid, "pass": ok, "reason": why, "status": st.get("status"),
                         "plan": st.get("plan"), "conclusion": st.get("conclusion"),
-                        "explanation": st.get("explanation"), "pending_approval": bool(r["pending_approval"])})
+                        "explanation": st.get("explanation"), "pending_approval": bool(r["pending_approval"]),
+                        # 给 judge 用（SPEC Q21）：工具结果、代码写的结论段、模型写的建议段
+                        "attribution": st.get("attribution"), "facts": st.get("facts"), "advice": st.get("advice"),
+                        "advice_check": st.get("advice_check")})
     n_pass = sum(x["pass"] for x in results)
     return {"pass": n_pass == runs, "runs_passed": n_pass, "runs": results,
             "reason": f"{n_pass}/{runs} runs correct" + ("" if n_pass == runs else

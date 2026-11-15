@@ -103,6 +103,7 @@ def analyze(question: str, user_id: str, llm: LLM) -> dict:
             queries += 1
             result = query_metrics(out.get("mql") or {}, user_id)
             step["result_ok"] = result["ok"]
-            feedback = "查询结果：" + _tool_result(result)
+            step["result"] = _tool_result(result)   # 模型实际看到的工具结果，judge 核对"有没有编造"用（SPEC Q21）
+            feedback = "查询结果：" + step["result"]
         messages.append({"role": "user", "content": feedback})
     return {"status": "failed", "conclusion": None, "explanation": "", "steps": steps, "queries": queries}

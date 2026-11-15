@@ -15,13 +15,12 @@
     否则恢复时会重新调用模型，结果可能变（甚至换了一组选项），用户的回答就对不上了。
   - 审批人权限、拒绝理由在 resume() 里、恢复图之前检查；不合法的审批请求不会改变任何状态。
   - 暂停广告组只执行一次靠 actions.py 的幂等键 + 原子条件更新，不靠 LangGraph。
-  - 计算交给 decompose_roas，LLM 只负责理解问题（route）和写解释（explain）。
+  - 计算交给 decompose_roas，结论段由代码模板生成（explain.py），LLM 只负责理解问题（route）和写建议段（explain）。
 """
 
 from __future__ import annotations
 
 import json
-import math
 import os
 import uuid
 from datetime import date, datetime
@@ -36,13 +35,13 @@ from psycopg.rows import dict_row
 
 from . import actions, clarify
 from .attribution.decompose import Window, decompose_roas
+from .attribution.explain import TemplateError, advice_context, basis_line, new_numbers, render_facts
 from .db import reader_conn
 from .llm import LLM
 from .nl2mql import answer_question
 from .semantic.catalog import load_catalog
 from .semantic.mql import TimeSpec, resolve_window, time_rules
 
-CAUSE_NAMES = {"cvr": "转化率下降", "ad_aov": "广告客单价下降", "cpc": "点击成本上升", "refund": "退款增加"}
 
 
 class State(TypedDict, total=False):
@@ -58,7 +57,10 @@ class State(TypedDict, total=False):
     clarify_reply: str         # 用户对反问的回答（按钮值或自由文本）
     attribution: dict          # decompose_roas 的结果
     conclusion: dict           # 结构化结论（评测用）：main_cause / ad_group_id / suggest_pause / significant
-    explanation: str           # basis + 模型写的解释
+    explanation: str           # facts + 模型写的建议（SPEC Q21）
+    facts: str                 # 代码按模板生成的结论段
+    advice: str                # 模型写的"建议和说明"（数字检查不通过时为空）
+    advice_check: dict         # {"retried", "dropped"}：数字检查是否触发重写 / 丢弃
     basis: str                 # 代码生成的口径和对比窗口说明
     proposal: dict
     decision: dict
@@ -96,15 +98,16 @@ ROUTE_PROMPT = """你是跨境电商经营助手的路由器。判断用户问�
 时间：{time_rules}
 """
 
-EXPLAIN_PROMPT = """你是跨境电商广告分析师。下面是系统用确定性算法算出的归因结果（JSON）。
-请用中文写一段不超过 200 字的解释给卖家看：说明对比的两个时间窗口、ROAS 变化了多少、主因是什么、定位到哪个广告组、建议怎么做。
+ADVICE_PROMPT = """你是跨境电商广告分析师。下面是系统已经写好的归因结论（由代码根据确定性算法生成，数字都已核对），以及一份结构化摘要。
+请在结论后面补一段"建议和说明"给卖家，不超过 150 字：
+- 结合主因和建议动作，说明卖家接下来具体可以检查或做什么。
+- 只有摘要里同时有 shop_main_cause 和 located_main_cause、且两者不同时，才解释两者为什么可以同时成立；摘要里没有的字段不要提。
+- 如果结论是没有显著下滑，简短说明无需处理即可，不要给处理建议。
 要求：
-- 所有数字必须来自给定的 JSON，不得编造或自行计算新数字；百分比保留一位小数。
-- 如果 significant 为 false，说明没有显著下滑、不需要处理，不要强行找原因。
-- factors 里每个因子的 effect_on_net_roas_pct 表示"只看这一个因子，净 ROAS 会变化多少"，direction 表示它是拉低还是抬高；照此描述，不要自己推断方向。
-- 如果 notes 不为空，必须在解释里提到；为空就不要提。
-- 面向卖家写，不要出现 JSON 字段名（如 significant、notes）。
-只输出 JSON：{"explanation": "..."}"""
+- 不要写任何数字（百分比、金额、日期都不要），数字已经在结论里了。广告组编号可以写。
+- 只根据结论里的信息写。结论里没有的原因不要当作事实写，也不要猜测。
+- 不要和结论矛盾，不要重复结论原文，不要出现字段名。
+只输出 JSON：{"advice": "..."}"""
 
 
 # ---------------- 节点 ----------------
@@ -220,38 +223,37 @@ def build_graph(llm: LLM, checkpointer) -> Any:
         return "explain"
 
     def explain(state: State) -> State:
+        # 数字和结论由代码按模板生成，模型只写最后一段建议（SPEC Q21）。
+        # 模板不认识的形态直接报错（TemplateError），不静默漏说。
         r = state["attribution"]
-        drilldown = r.get("found_by") == "drilldown"
-        # 下钻发现时，店铺整体的分解没有意义（不显著），给模型看的是定位到的广告组自己的分解
-        d = r.get("located_decomposition", {}) if drilldown else r.get("decomposition", {})
-        summary = {
-            "scope": r["scope"], "target": r["target"], "window": r["window"], "previous_window": r["previous_window"],
-            "significant": r["significant"],
-            "analysis_level": f"广告组 {r.get('located_ad_group')}（店铺整体不显著，下钻发现）" if drilldown else r["scope"],
-            "net_roas": {k: round(v, 3) for k, v in d.get("net_roas", {}).items()},
-            "net_roas_change_pct": round(d["total_change_pct"], 1) if d else None,
-            # 不给"占比"（下滑时占比的正负号容易被读反），给"该因子单独使净 ROAS 变化了多少"，并标明方向
-            "factors": {CAUSE_NAMES[k].replace("下降", "").replace("上升", "").replace("增加", ""): {
-                            "prev": round(v["prev"], 4), "cur": round(v["cur"], 4),
-                            "effect_on_net_roas_pct": round((math.exp(v["log_contrib"]) - 1) * 100, 1),
-                            "direction": "拉低" if v["log_contrib"] < 0 else "抬高"}
-                        for k, v in d.get("factors", {}).items()},
-            "main_cause": CAUSE_NAMES.get(r.get("located_main_cause")),
-            "located_ad_group": r.get("located_ad_group"),
-            "recommendation": (r.get("recommendation") or {}).get("reason"),
-            "notes": [x for x in [r.get("note"), (r.get("located_decomposition") or {}).get("note")] if x],
-        }
-        call = llm.chat_json([{"role": "system", "content": EXPLAIN_PROMPT},
-                              {"role": "user", "content": json.dumps(summary, ensure_ascii=False)}])
-        text = (call.parsed or {}).get("explanation", "") if not call.error else ""
-        # 口径和窗口由代码写明，不依赖模型记得说（SPEC Q15：用户说"ROI"时归因固定按净 ROAS 分析，不反问）
-        w, pw = r["window"], r["previous_window"]
-        basis = (f"分析口径：净 ROAS（扣除退款后的广告投入产出比）；"
-                 f"对比窗口：{w[0]}~{w[1]} vs {pw[0]}~{pw[1]}。")
+        try:
+            facts = render_facts(r, cat.today, cat.refund_settle_days)
+        except TemplateError as e:
+            return {"status": "failed", "message": f"TemplateError: {e}"}
+        messages = [{"role": "system", "content": ADVICE_PROMPT},
+                    {"role": "user", "content": f"结论：\n{facts}\n\n摘要：{json.dumps(advice_context(r), ensure_ascii=False)}"}]
+        call = llm.chat_json(messages)
+        advice = (call.parsed or {}).get("advice", "") if not call.error else ""
+        extra = new_numbers(advice, facts)
+        retried = bool(extra)
+        if extra:   # 段落里出现结论段没有的数字：回传重写一次
+            messages += [{"role": "assistant", "content": call.output},
+                         {"role": "user", "content": f"你的段落里出现了结论里没有的数字：{', '.join(extra)}。"
+                                                     f"请去掉所有数字，重新输出完整的 JSON。"}]
+            call = llm.chat_json(messages)
+            advice = (call.parsed or {}).get("advice", "") if not call.error else ""
+            extra = new_numbers(advice, facts)
+        dropped = bool(extra)
+        if dropped:   # 重写后仍有：丢掉这一段，只保留模板
+            advice = ""
+        explanation = facts + (f"\n建议和说明：{advice}" if advice else "")
         status = "awaiting_approval" if state["conclusion"]["suggest_pause"] else "answered"
-        return {"explanation": f"{basis}\n{text}", "basis": basis, "status": status}
+        return {"explanation": explanation, "basis": basis_line(r), "facts": facts, "advice": advice,
+                "advice_check": {"retried": retried, "dropped": dropped}, "status": status}
 
     def after_explain(state: State) -> str:
+        if state["status"] == "failed":
+            return END
         return "create_proposal" if state["conclusion"]["suggest_pause"] else END
 
     def create_proposal(state: State) -> State:

@@ -152,3 +152,37 @@ def test_no_proposal_when_cause_is_promotion(saver):
     # 口径和窗口由代码写明（SPEC Q15），不依赖模型
     assert r["state"]["explanation"].startswith("分析口径：净 ROAS")
     assert "2026-10-19~2026-10-25 vs 2026-10-12~2026-10-18" in r["state"]["basis"]
+
+
+class AdviceLLM(FakeLLM):
+    """建议段依次返回给定的文本，用来测数字检查（SPEC Q21）。"""
+
+    def __init__(self, plan: dict, advices: list[str]):
+        super().__init__(plan)
+        self.advices = list(advices)
+
+    def chat_json(self, messages):
+        if "路由器" in messages[0]["content"]:
+            return super().chat_json(messages)
+        out = {"advice": self.advices.pop(0)}
+        call = LLMCall("fake", messages, json.dumps(out, ensure_ascii=False), 0, 0, 0.0, parsed=out)
+        self.calls.append(call)
+        return call
+
+
+JP_AG08 = {"intent": "attribution", "scope": "ad_group", "target": "JP-AG08",
+           "time": {"range": "custom", "start": "2026-10-19", "end": "2026-10-25"}}
+
+
+@pytest.mark.parametrize("advices, kept, retried, dropped", [
+    (["先确认 JP-AG08 的商品是否在降价促销。"], True, False, False),
+    (["预计两周后能恢复到 7.5。", "先确认 JP-AG08 是否在促销。"], True, True, False),
+    (["预计两周后能恢复到 7.5。", "大约 3 天后再看。"], False, True, True),
+])
+def test_advice_with_new_numbers_is_rewritten_or_dropped(saver, advices, kept, retried, dropped):
+    llm = AdviceLLM(JP_AG08, advices)
+    r = run("JP-AG08 那周为什么 ROI 变差了", "u_admin", build_graph(llm, saver))
+    st = r["state"]
+    assert st["advice_check"] == {"retried": retried, "dropped": dropped}
+    assert ("建议和说明：" in st["explanation"]) == kept
+    assert st["explanation"].startswith(st["facts"]) and "广告客单价下降" in st["facts"]
