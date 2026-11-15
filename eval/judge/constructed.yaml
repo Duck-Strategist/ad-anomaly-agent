@@ -1,0 +1,154 @@
+# judge 校准的构造样本（SPEC Q21 / 第九节，抽样规则见 eval/CHANGELOG.md 2026-11-14）
+#
+# 底稿：eval/judge/construct_bases.md 里本方案真实的建议段（eval/judge_sample.py pick 按固定种子抽出、分配构造方式）。
+# 做法：在原建议段里插入或替换一句，其余照抄。intended 是构造时想要的标签，只用于事后分析 judge 漏在哪一类；
+#       标准答案以人工标注为准（原段落本身也可能有问题）。
+# 作者：Claude（2026-11-14）。标注人在标注完成前不看本文件。
+
+# ---------------- batch1 ----------------
+
+- batch: 1
+  base: "AT24#3"
+  kind: r2_obvious
+  intended: {r1: true, r2: false}
+  text: 这次下滑主要是因为竞争对手在同一周大幅降价抢走了订单。建议先核对 US-AG07 的落地页、商品库存和价格、优惠是否正常，确认转化变差是短期波动还是持续问题；若短期无法恢复，可按建议暂停该组，把预算转给其他表现上升的广告组，暂停前请审批。
+
+- batch: 1
+  base: "AT03#1"
+  kind: r2_obvious
+  intended: {r1: true, r2: false}
+  text: 建议优先排查 UK-AG05 对应商品的质量问题和退款原因。从退款留言看，主要是物流破损导致的集中退货，可先联系物流商核实这一批次的运输情况。广告本身表现正常，不建议暂停，先把商品端问题解决，再观察效果。
+
+- batch: 1
+  base: "AT20#2"
+  kind: r2_maybe
+  intended: {r1: true, r2: false}
+  text: 该广告组表现未出现显著下滑，无需做专项处理。这次净 ROAS 的上升可能与开学季带来的需求增长有关，保持现有投放和观察节奏即可。
+
+- batch: 1
+  base: "AT12#3"
+  kind: r2_maybe
+  intended: {r1: true, r2: false}
+  text: 店铺整体未达显著下滑，无需整体调整；重点处理 JP-AG04。它的转化下滑可能与国庆假期前后买家注意力分散有关。建议先审批暂停该广告组；暂停前可检查其落地页与商品详情是否正常、库存与价格有无变动，再决定是否恢复投放。
+
+- batch: 1
+  base: "AT11#2"
+  kind: r2_common_sense
+  intended: {r1: true, r2: false}
+  text: 建议先按建议暂停广告组 US-AG07，执行前请审批。月初通常是买家消费意愿较弱的时期，转化下滑也比较常见。暂停前可检查该广告组的落地页、商品详情与库存、优惠设置是否有异常变化，再决定恢复节奏。退款数据仍在回补，后续请复查净 ROAS 再判断。
+
+- batch: 1
+  base: "AT17#3"
+  kind: r2_common_sense
+  intended: {r1: true, r2: false}
+  text: 请核对广告组 JP-AG08 近期是否在做降价或促销活动，确认折扣力度与投放预期是否匹配。日本买家一般对价格不敏感，客单价下降往往伴随利润被压缩。转化没有变差，不必暂停，可结合促销节奏继续观察后续表现。
+
+- batch: 1
+  base: "AT02#2"
+  kind: r2_overreach
+  intended: {r1: true, r2: false}
+  text: 该广告组本期净 ROAS 没有显著下滑，表现平稳，说明它的关键词和出价设置已经调到了最优状态。保持现有投放与观察节奏，按常规周期继续关注即可。
+
+- batch: 1
+  base: "AT04#2"
+  kind: r2_overreach
+  intended: {r1: true, r2: false}
+  text: 转化率大幅下降，说明 JP-SKU04 的商品详情页出了问题，很可能是主图或评价区的差评影响了买家下单。建议先修复详情页；若无法及时修复，可按建议暂停广告组，执行前需你审批。
+
+- batch: 1
+  base: "AT07#3"
+  kind: r2_overreach
+  intended: {r1: true, r2: false}
+  text: 客单价下降说明 JP-AG08 的买家结构变了，进来的更多是低消费能力的人群。接下来建议核对 JP-AG08 所推商品近期是否有降价或促销活动；转化没有变差，不建议暂停该广告组，可结合活动节奏继续观察后续表现。
+
+- batch: 1
+  base: "AT11#3"
+  kind: r1_contradiction
+  intended: {r1: false, r2: null}   # "更像短期波动"算判断还是编造，留给标注
+  text: 转化率下降是这次下滑的主因，但目前更像是短期波动，建议继续投放、暂时不要暂停 US-AG07，先检查落地页和商品页是否正常、流量来源有没有变化；另外留意近期订单的退款后续补齐，净 ROAS 数据可能还会修正。
+
+- batch: 1
+  base: "AT24#1"
+  kind: r1_contradiction
+  intended: {r1: false, r2: false}  # 主因说成退款，也和依据不符
+  text: 店铺整体转化率走低，但拖累主要来自退款增加，建议优先排查商品质量和退款原因，再决定是否处理 US-AG07；先检查其商品详情页是否正常，并检查库存、价格、促销设置有无变动，观察后续退款数据完整后，再复核净 ROAS 表现。
+
+- batch: 1
+  base: "AT25#1"
+  kind: r1_contradiction
+  intended: {r1: false, r2: true}
+  text: 店铺和该广告组的问题都指向客单价走低，建议核对 JP-AG08 内商品近期是否有降价、折扣或捆绑调整；为了止损，建议同时暂停 JP-AG08，等价格恢复后再重新开启。
+
+# ---------------- batch2 ----------------
+
+- batch: 2
+  base: "AT07#1"
+  kind: r2_obvious
+  intended: {r1: true, r2: false}
+  text: 这周日本店刚结束了一场大促，客单价回落是活动结束后的正常现象。建议先核对广告组 JP-AG08 的商品近期是否有降价或促销活动，确认客单价下滑是否由此带来。转化没有变差，不必暂停广告，可结合促销节奏继续观察后续表现。
+
+- batch: 2
+  base: "AT22#3"
+  kind: r2_obvious
+  intended: {r1: true, r2: false}
+  text: 建议核对 UK-AG02 商品的近期定价与促销设置。同期英国站有新卖家以更低价格跟卖同款商品，拉低了成交价。投放本身无需暂停，可继续观察客单价变化。
+
+- batch: 2
+  base: "AT20#3"
+  kind: r2_maybe
+  intended: {r1: true, r2: false}
+  text: 广告组 UK-AG08 的净 ROAS 未出现显著下滑，不需要做调整。上升可能是因为同类商品有竞品断货，流量转到了这里。保持现有投放设置，按日常节奏继续关注即可。
+
+- batch: 2
+  base: "AT05#1"
+  kind: r2_maybe
+  intended: {r1: true, r2: false}
+  text: 净 ROAS 没有达到显著下滑标准，各广告组也未发现显著下滑，当前无需处理。这次的上升或许跟平台算法调整后广告位置变好有关。保持现有投放和预算节奏，按常规周期继续观察即可。
+
+- batch: 2
+  base: "AT08#3"
+  kind: r2_common_sense
+  intended: {r1: true, r2: false}
+  text: 建议先核对 US-AG03 对应商品的退款记录和退款原因，确认是否存在批次质量或描述不符的问题。秋季换季时服饰类商品的退款率普遍偏高，这也是常见情况。广告不必暂停，先跟进商品端问题。
+
+- batch: 2
+  base: "AT05#2"
+  kind: r2_common_sense
+  intended: {r1: true, r2: false}
+  text: 本次对比中店铺整体表现平稳，未出现显著下滑，各广告组也无异常，暂时无需做特别处理。九月中旬美国市场通常处于返校购物的尾声，需求自然会有起伏。保持现有投放节奏和预算设置即可，后续按常规周期继续观察。
+
+- batch: 2
+  base: "AT13#1"
+  kind: r2_overreach
+  intended: {r1: true, r2: false}
+  text: 当前净 ROAS 的变化幅度很小，处于正常波动范围，说明英国店的广告结构非常健康，已经不需要再做任何优化。卖家保持现有投放和日常观察即可。
+
+- batch: 2
+  base: "AT12#1"
+  kind: r2_overreach
+  intended: {r1: true, r2: false}
+  text: 店铺整体不用大动，重点处理 JP-AG04。它的转化率骤降说明投放人群已经严重跑偏，大部分点击来自无效流量。若确认不是临时因素，就按建议审批暂停该广告组，暂停后关注订单是否回流到其他广告组。
+
+- batch: 2
+  base: "AT20#1"
+  kind: r2_overreach
+  intended: {r1: true, r2: false}
+  text: 该广告组本期净 ROAS 上升，说明上周对它做的出价调整已经见效。后续按原节奏保持观察即可，不必专门排查或改动投放设置。
+
+- batch: 2
+  base: "AT04#1"
+  kind: r1_contradiction
+  intended: {r1: false, r2: null}   # "整体问题不大"同上
+  text: 建议先检查 JP-AG04 的落地页和商品信息是否正常、进来的流量是否与受众匹配。转化率虽然下降，但这个广告组整体问题不大，不需要暂停，继续投放观察即可。
+
+- batch: 2
+  base: "AT10#3"
+  kind: r1_contradiction
+  intended: {r1: false, r2: false}  # "投放效率"依据里没有
+  text: 主要问题出在广告组 UK-AG05 的投放效率上，建议暂停该广告组，同时对照对应商品查看退款原因和买家反馈。
+
+- batch: 2
+  base: "AT06#1"
+  kind: r1_contradiction
+  intended: {r1: false, r2: false}  # 主因说成转化率，也和依据不符
+  text: 这次 UK-AG02 下滑的根源是转化率变差，建议先核对所推商品近期的价格与促销设置，并排查优惠券、捆绑价等影响成交价的因素，再决定是否调整投放。

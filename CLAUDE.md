@@ -47,10 +47,12 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 | `adagent/semantic/` | 指标目录、MQL 校验、编译器、执行器 `query_metrics` |
 | `adagent/nl2mql.py` | 自然语言 → MQL → 查询，带自修正（最多重试 2 次） |
 | `adagent/attribution/decompose.py` | 确定性归因：对数分解 + 广告组贡献度 + z 检验 |
+| `adagent/attribution/explain.py` | 归因解释模板：结论段由代码生成，不认识的形态报错；检查模型建议段里的新数字（SPEC Q21） |
 | `adagent/workflow.py` | LangGraph 工作流：路由 → 问数 / 归因 → 解释 → 提议 → 审批（interrupt）→ 执行；`run()` / `resume()` |
 | `adagent/clarify.py` | 歧义反问：校验反问的词和选项、映射用户回答、兜底文案 |
 | `adagent/actions.py` | 唯一的写动作：提议、幂等执行暂停、拒绝 |
 | `adagent/llm.py` | DeepSeek / 千问调用（OpenAI 兼容接口） |
+| `eval/judge/`、`eval/judge_sample.py` | judge 校准：标注说明 `rubric.md`、构造样本、批次文件、本地标注页 `label.html`（`*_key.json` 标注完成前不打开） |
 | `eval/` | 评测题、评分器、基线（Text-to-SQL）、运行器；`eval/ground_truth/events.json` 是事件真值，只给评测用 |
 | `tests/` | 权限、编译器、评分器、分解算法的测试 |
 
@@ -66,5 +68,6 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 - 评测工具：`eval/run.py`（查询 / 歧义 / 归因，含 ReAct 基线 `eval/baseline_react.py`）、`eval/summarize.py`（合并多次运行出表）、`eval/rescore.py`（修正 gold 后用已存结果重判，不重跑模型）。
 - **M3 相对时间已完成（2026-11-14，SPEC Q19）**：MQL 增加 `calendar`，日期由代码换算；时间范围检查；回答写出统计区间。留出集 25 题（`eval/questions/m3_time_holdout.yaml`）本方案 DeepSeek 23/25、千问 24/25；原 76 题上跨模型仍相差 7.6 个百分点，未达标（见 RESULTS 顶部）。
 - **M3 两段时间对比已完成（2026-11-14，SPEC Q20）**：`compare` 可写成一段时间且必须在本期之前；自然周 / 月的 `previous_period` 取同期。留出集 25 题 × 3 次（`eval/questions/m3_compare_holdout.yaml`），本方案两个模型 pass^3 都是 25/25；原 76 题上跨模型差距 3.0 个百分点（原题偏高，见 RESULTS 顶部）。
-- **下一步（M3）**：LLM judge 校准（解释分）、极简前端、Docker Compose、Langfuse、README / 演示脚本。
+- **M3 归因解释改成模板（2026-11-14，SPEC Q21）**：结论段由代码生成，模型只写建议段，judge 只评 R1 / R2。校准样本两批，每批 40 条，已组好（`eval/judge/batch1.json`、`batch2.json`），等人工标注。
+- **下一步（M3）**：人工标注 → judge prompt 和 κ / 召回率、极简前端、Docker Compose、Langfuse、README / 演示脚本。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点）。

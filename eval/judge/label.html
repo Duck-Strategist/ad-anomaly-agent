@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>解释分标注</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e2e1dc; --accent:#2f5d8a; --yes:#2e7d4f; --no:#b3412e; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --card:#1f1f1d; --ink:#ecebe6; --muted:#a09f99; --line:#34332f; --accent:#7fa8d1; --yes:#6cc093; --no:#e3836f; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.6 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { position:sticky; top:0; z-index:2; background:var(--bg); border-bottom:1px solid var(--line); padding:10px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header strong { margin-right:auto; }
+  button, label.file { font:inherit; padding:6px 12px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:6px; cursor:pointer; }
+  button:disabled { opacity:.4; cursor:default; }
+  input[type=file] { display:none; }
+  main { max-width:1200px; margin:0 auto; padding:16px; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
+  h3 { margin:0 0 6px; font-size:13px; color:var(--muted); font-weight:600; }
+  pre { white-space:pre-wrap; word-break:break-all; margin:0; font:13px/1.55 ui-monospace, Consolas, monospace; max-height:60vh; overflow:auto; }
+  .text { font-size:16px; border-left:3px solid var(--accent); padding-left:12px; }
+  .q { display:flex; gap:10px; align-items:center; margin:10px 0; flex-wrap:wrap; }
+  .q span { min-width:15em; }
+  .q button.on.yes { background:var(--yes); color:#fff; border-color:var(--yes); }
+  .q button.on.no { background:var(--no); color:#fff; border-color:var(--no); }
+  textarea { width:100%; font:inherit; padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
+  .muted { color:var(--muted); font-size:13px; }
+  nav { display:flex; gap:4px; flex-wrap:wrap; margin:12px 0; }
+  nav button { padding:2px 7px; font-size:12px; }
+  nav button.done { border-color:var(--yes); }
+  nav button.cur { outline:2px solid var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <strong>解释分标注 <span id="batch" class="muted"></span></strong>
+  <span id="progress" class="muted"></span>
+  <label class="file">打开批次文件<input id="file" type="file" accept=".json"></label>
+  <button id="export" disabled>导出标注</button>
+</header>
+<main>
+  <p id="empty" class="muted">打开 eval/judge/batch1.json（或 batch2.json）开始。标注说明见 eval/judge/rubric.md。进度自动保存在本浏览器里；全部标完后点"导出标注"，把下载的文件放到 eval/judge/ 下。<br>不要打开 *_key.json，也不要先看 judge 的结果。</p>
+  <div id="app" hidden>
+    <nav id="nav"></nav>
+    <div class="card" style="margin-bottom:16px">
+      <h3 id="sid"></h3>
+      <div id="question"></div>
+    </div>
+    <div class="grid">
+      <div class="card"><h3>依据（工具结果 / 代码生成的结论段）</h3><pre id="evidence"></pre></div>
+      <div>
+        <div class="card" style="margin-bottom:16px"><h3>结构化结论</h3><div id="conclusion"></div></div>
+        <div class="card" style="margin-bottom:16px"><h3>待评文字</h3><div id="text" class="text"></div></div>
+        <div class="card">
+          <div class="q"><span>R1 建议和结论一致</span><button data-k="r1" data-v="true" class="yes">是</button><button data-k="r1" data-v="false" class="no">否</button></div>
+          <div class="q"><span>R2 没有编造依据里没有的事实</span><button data-k="r2" data-v="true" class="yes">是</button><button data-k="r2" data-v="false" class="no">否</button></div>
+          <textarea id="note" rows="2" placeholder="备注（可选；拿不准就写“拿不准：理由”）"></textarea>
+          <div class="q"><button id="prev">← 上一条</button><button id="next">下一条 →</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+let items = [], name = "", labels = {}, i = 0;
+const $ = id => document.getElementById(id);
+const store = {
+  load(k) { try { return JSON.parse(localStorage.getItem(k)) || {}; } catch { return {}; } },
+  save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+const key = () => "judge-labels:" + name;
+const done = id => labels[id] && typeof labels[id].r1 === "boolean" && typeof labels[id].r2 === "boolean";
+
+$("file").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (f.name.includes("_key")) { alert("这是答案文件，标注前不要打开。"); return; }
+  items = JSON.parse(await f.text()); name = f.name.replace(/\.json$/, "");
+  labels = store.load(key()); i = Math.max(0, items.findIndex(x => !done(x.id)));
+  $("empty").hidden = true; $("app").hidden = false; $("export").disabled = false; $("batch").textContent = name;
+  render();
+});
+
+function render() {
+  const it = items[i], l = labels[it.id] || {};
+  $("sid").textContent = `${it.id}（${i + 1}/${items.length}）`;
+  $("question").textContent = it.question;
+  $("evidence").textContent = it.evidence;
+  $("conclusion").textContent = it.conclusion;
+  $("text").textContent = it.text;
+  $("note").value = l.note || "";
+  document.querySelectorAll(".q button[data-k]").forEach(b => b.classList.toggle("on", l[b.dataset.k] === (b.dataset.v === "true")));
+  $("nav").innerHTML = "";
+  items.forEach((x, j) => {
+    const b = document.createElement("button");
+    b.textContent = j + 1; b.className = (done(x.id) ? "done " : "") + (j === i ? "cur" : "");
+    b.onclick = () => { i = j; render(); };
+    $("nav").appendChild(b);
+  });
+  $("progress").textContent = `已完成 ${items.filter(x => done(x.id)).length}/${items.length}`;
+}
+
+function set(k, v) {
+  const id = items[i].id; labels[id] = { ...(labels[id] || {}), [k]: v }; store.save(key(), labels); render();
+}
+document.querySelectorAll(".q button[data-k]").forEach(b => b.addEventListener("click", () => set(b.dataset.k, b.dataset.v === "true")));
+$("note").addEventListener("input", e => { const id = items[i].id; labels[id] = { ...(labels[id] || {}), note: e.target.value }; store.save(key(), labels); });
+$("prev").onclick = () => { if (i > 0) { i--; render(); } };
+$("next").onclick = () => { if (i < items.length - 1) { i++; render(); } };
+$("export").onclick = () => {
+  const missing = items.filter(x => !done(x.id)).map(x => x.id);
+  if (missing.length && !confirm(`还有 ${missing.length} 条没标完（${missing.slice(0, 5).join(", ")}…），仍然导出？`)) return;
+  const out = { batch: name, labeled_at: new Date().toISOString(), labels };
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: "application/json" }));
+  a.download = `${name}_human.json`; a.click();
+};
+</script>
+</body>
+</html>
