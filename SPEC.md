@@ -625,3 +625,9 @@ z = Δln(net_roas) / √(1/本期广告订单 + 1/上期广告订单)
 - **目标**：拿到代码、准备好 `.env` 后，一条 `docker compose up` 就能打开页面。
 - **数据怎么进库**：选 (a)，一次性的 `seed` 服务。它和前端用同一个镜像，运行"生成 → 导入"后退出；库里已经有数据就跳过，不冲掉演示状态（如已暂停的广告组）。前端在 seed 成功退出后才启动（`depends_on: condition: service_completed_successfully`），seed 在数据库健康检查通过后才启动（`service_healthy`）。没选 (b) 手动导入（做不到一条命令启动），也没选 (c) 每次重新导入（演示到一半重启，操作就没了）。
 - **约定**：容器之间用服务名访问（`PG_HOST=db`、`PG_PORT=5432`，在 compose 里覆盖 `.env` 的本机值）；前端监听 `0.0.0.0`；`.env` 只在运行时用 `env_file` 注入，`.dockerignore` 排除 `.env`、`.venv`、`eval/runs`，密钥不进镜像；镜像基于 `python:3.12-slim` + uv，按 `uv.lock` 精确安装，不装开发依赖；评测仍在本机跑，不进容器。
+
+**Q24. ~~Langfuse 怎么接~~**：已于 2026-11-16 确定（小测后用户选择 D1(a)，自己注册并填好 key；D2、D3 按推荐的 (a)）。
+- **D1 部署**：用 **Langfuse Cloud 免费版**，不自托管。原因：自托管 v4 要 7 个容器（web、worker、ClickHouse、Redis、MinIO、PostgreSQL、AI 网关），官方建议 4 核 / 16GB，本机 Docker 只分到约 3.7GB；数据是合成的，发到外部服务没有隐私顾虑。这改变了第二节"Docker Compose（app + PostgreSQL + Langfuse）"和第六节"Docker 自托管"的原计划；真实业务里 trace 含客户经营数据，应自托管。代码不依赖部署方式：只看 `LANGFUSE_BASE_URL` 和两个 key，没有 key 就完全不记录，compose 和测试都不依赖 Langfuse。
+- **D2 记录粒度**：每次请求（提问 / 回答反问 / 审批）一个根 span，trace id 由 `thread_id` 决定（同一个会话的提问和审批落在同一条 trace 里，和审计日志的 `trace_id` 一致）；每个工作流节点一个 span（输出就是 MQL、SQL、分解结果、结论段等，行数据截断）；每次模型调用一个 generation（消息、输出、token、耗时）。`interrupt` 是控制流，不记成错误。
+- **D3 评测**：默认不上报（`eval` 包里把 `ADAGENT_TRACE` 默认设为 0），`eval.run --trace` 才上报，并自动打上 `eval` 标签；测试也不上报。
+- **失败处理**：观测不能拖垮主流程。SDK 在后台批量发送、出错只记日志；我们自己的埋点代码也全部包在 try 里，埋点出错只记日志，业务代码的异常照常抛出。

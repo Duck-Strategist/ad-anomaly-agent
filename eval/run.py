@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -145,7 +146,10 @@ def main() -> None:
     ap.add_argument("--questions", default=str(ROOT / "questions" / "m1.yaml"))
     ap.add_argument("--ids", default="")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--trace", action="store_true", help="上报 Langfuse（带 eval 标签）；默认不上报")
     args = ap.parse_args()
+    if args.trace:
+        os.environ["ADAGENT_TRACE"] = "1"
 
     qs = load_questions(Path(args.questions))
     if args.ids:

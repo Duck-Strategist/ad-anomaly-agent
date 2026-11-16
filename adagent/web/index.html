@@ -177,7 +177,7 @@ const fmt = v => Number.isInteger(v) ? v.toLocaleString() : (Math.abs(v) < 1 ? v
 
 function processView(r) {
   let h = "";
-  if (r.intent) h += `<div class="muted">路由：${esc(r.intent)} · thread_id：${esc(r.thread_id)}</div>`;
+  if (r.intent) h += `<div class="muted">路由：${esc(r.intent)} · thread_id：${esc(r.thread_id)}${r.trace_url ? ` · <a href="${esc(r.trace_url)}" target="_blank" rel="noopener">在 Langfuse 里看完整 trace</a>` : ""}</div>`;
   if (r.answer?.mql) h += `<div class="label">模型输出的 MQL（JSON，模型不写 SQL）</div><pre>${esc(JSON.stringify(r.answer.mql, null, 2))}</pre>`;
   if (r.answer?.sql) h += `<div class="label">编译器生成的 SQL（权限条件由编译器注入，参数绑定）</div>${r.answer.sql.map(s => `<pre>${esc(s)}</pre>`).join("")}`;
   if (r.basis) h += `<div class="label">口径</div><pre>${esc(r.basis)}</pre>`;

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from openai import OpenAI
 
 from . import db  # noqa: F401  确保 .env 已加载
+from . import tracing
 
 PROVIDERS = {
     "deepseek": ("DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"),
@@ -53,23 +54,27 @@ class LLM:
 
     def chat_json(self, messages: list[dict]) -> LLMCall:
         """要求模型输出 JSON 对象；解析失败不抛异常，记录在 call.error 里交给调用方处理。"""
-        t0 = time.perf_counter()
-        resp = self.client.chat.completions.create(
-            model=self.model, messages=messages, temperature=0,
-            response_format={"type": "json_object"},
-        )
-        text = resp.choices[0].message.content or ""
-        call = LLMCall(
-            model=self.model, messages=messages, output=text,
-            prompt_tokens=resp.usage.prompt_tokens if resp.usage else 0,
-            completion_tokens=resp.usage.completion_tokens if resp.usage else 0,
-            latency_s=round(time.perf_counter() - t0, 2),
-        )
-        try:
-            call.parsed = json.loads(text)
-            if not isinstance(call.parsed, dict):
-                raise ValueError("top-level JSON must be an object")
-        except ValueError as e:
-            call.error = f"invalid JSON output: {e}"
+        with tracing.observation("llm", as_type="generation", model=self.model, input=messages,
+                                 model_parameters={"temperature": 0, "response_format": "json_object"}) as gen:
+            t0 = time.perf_counter()
+            resp = self.client.chat.completions.create(
+                model=self.model, messages=messages, temperature=0,
+                response_format={"type": "json_object"},
+            )
+            text = resp.choices[0].message.content or ""
+            call = LLMCall(
+                model=self.model, messages=messages, output=text,
+                prompt_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+                completion_tokens=resp.usage.completion_tokens if resp.usage else 0,
+                latency_s=round(time.perf_counter() - t0, 2),
+            )
+            try:
+                call.parsed = json.loads(text)
+                if not isinstance(call.parsed, dict):
+                    raise ValueError("top-level JSON must be an object")
+            except ValueError as e:
+                call.error = f"invalid JSON output: {e}"
+            tracing.safe_update(gen, output=text, usage_details={"input": call.prompt_tokens, "output": call.completion_tokens},
+                                **({"level": "WARNING", "status_message": call.error} if call.error else {}))
         self.calls.append(call)
         return call

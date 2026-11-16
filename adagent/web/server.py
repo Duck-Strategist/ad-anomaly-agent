@@ -27,7 +27,7 @@ from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import actions, workflow
+from .. import actions, tracing, workflow
 from ..db import app_conn
 from ..llm import LLM
 from ..semantic.catalog import load_catalog
@@ -51,6 +51,7 @@ async def lifespan(_app: FastAPI):
     _saver = PostgresSaver(pool)
     _saver.setup()
     yield
+    tracing.shutdown()   # 把还没发出去的 trace 发完
     pool.close()
 
 
@@ -156,6 +157,7 @@ def view(res: dict, user: str) -> dict:
                                  "conclusion", "proposal", "decision", "execution")}
     out["thread_id"] = res["thread_id"]
     out["requested_by"] = s.get("user_id")
+    out["trace_url"] = tracing.trace_url(res["thread_id"])
     out["intent"] = (s.get("plan") or {}).get("intent")
     out["already_processed"] = res.get("already_processed", False)
     if s.get("answer"):

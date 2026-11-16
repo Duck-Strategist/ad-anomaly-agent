@@ -279,3 +279,15 @@
 - **踩到的坑**：`docker compose build` 报 `header key "x-docker-expose-session-sharedkey" contains value with non-printable ASCII characters`，而 `docker build` 正常。怀疑是项目路径里的中文被放进了请求头；把同样的文件复制到全英文路径下，compose 构建成功，确认了原因。处理：不改目录名，本机先 `docker build -t adagent-app .`，compose 看到镜像已存在就不构建；README 写明。
 - **一句话**：`depends_on` 默认只等进程启动，不等服务可用；要等就写健康检查条件。
 - **追问**：seed 为什么不放进数据库的 init 脚本？→ init 脚本只在数据卷为空时执行、只能跑 SQL，而数据是 Python 按固定种子生成的；放在单独服务里，生成逻辑只有一份，和本机 `datagen` 共用。
+
+### 31. Langfuse：一条 trace 串起"提问 → 提议 → 审批 → 执行"，观测不能拖垮主流程
+- **情境**：SPEC 原计划自托管 Langfuse。查了现状：v4 自托管要 7 个容器（含 ClickHouse、Redis、MinIO），官方建议 4 核 / 16GB，本机 Docker 只分到约 3.7GB。数据是合成的，用户选了 Cloud 免费版，并写明真实业务里 trace 含客户经营数据、应该自托管（SPEC Q24）。
+- **设计**：
+  - trace id 由 thread_id 决定（uuid4().hex 正好是 Langfuse 要求的 32 位十六进制）。提问和审批是两次独立的 HTTP 请求，但落在同一条 trace 里，和审计日志的 trace_id 是同一个值：从审计记录能跳到当时的推理过程，反过来也行。
+  - 每个工作流节点一个 span（输出就是 MQL、SQL、分解结果、结论段），每次模型调用一个 generation（消息、输出、token、耗时）。
+  - LangGraph 的 `interrupt` 是靠抛异常实现的。如果直接用上下文管理器包住节点，每次等待审批都会被记成错误。处理：节点包装里单独接住 `GraphInterrupt`，正常结束这个 span，标记"等待用户"，再把异常交还给 LangGraph。
+  - 观测不能拖垮主流程：SDK 本身后台批量发送；我们自己的埋点（开始、更新、结束）也全部包在 try 里，出错只记日志，业务异常照常抛出。有测试覆盖"Langfuse 连不上 / 更新失败时节点照常返回"。
+  - 评测和测试默认不上报（几百次调用会淹没演示记录、用掉免费额度），`eval.run --trace` 才上报并打 `eval` 标签。
+- **实测**（2026-11-16）：页面上问一道归因题再批准，用 API 取回 trace：`ask` 下有 route（含 1 次模型调用，569/107 token）、attribute、explain（含 1 次模型调用）、create_proposal、approve（等待）；几秒后的 `approve` 请求作为第二个根 span 挂在同一条 trace 下，里面是 approve 和 execute。
+- **一句话**：trace id 和业务 id 对齐，观测数据才能和审计记录互相查；埋点要 fail-open。
+- **追问**：为什么不用 Langfuse 的 OpenAI 自动埋点？→ 我们的 LLM 封装只有一个入口（`chat_json`），手动包一层 generation 就够了，而且能把 JSON 解析失败标成 WARNING；节点 span 是自动埋点给不了的。

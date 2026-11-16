@@ -33,7 +33,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from psycopg.rows import dict_row
 
-from . import actions, clarify
+from langgraph.errors import GraphInterrupt
+
+from . import actions, clarify, tracing
 from .attribution.decompose import Window, decompose_roas
 from .attribution.explain import TemplateError, advice_context, basis_line, new_numbers, render_facts
 from .db import reader_conn
@@ -282,7 +284,7 @@ def build_graph(llm: LLM, checkpointer) -> Any:
                      ("cannot_answer", cannot_answer), ("attribute", attribute),
                      ("explain", explain), ("create_proposal", create_proposal), ("approve", approve),
                      ("execute", execute)]:
-        g.add_node(name, fn)
+        g.add_node(name, _traced(name, fn))
     g.add_edge(START, "route")
     g.add_conditional_edges("route", after_route, ["query", "attribute", "cannot_answer"])
     g.add_conditional_edges("query", after_query, ["ask_clarify", END])
@@ -295,6 +297,34 @@ def build_graph(llm: LLM, checkpointer) -> Any:
     for n in ("cannot_answer", "execute"):
         g.add_edge(n, END)
     return g.compile(checkpointer=checkpointer)
+
+
+# ---------------- 观测（SPEC Q24） ----------------
+
+NODE_INPUT = {   # 每个节点的 span 记录哪些输入（其余从 trace 上一层能看到）
+    "route": ("question",), "apply_clarify": ("clarify", "clarify_reply"), "approve": ("proposal",),
+    "execute": ("proposal", "decision"),
+}
+
+
+def _traced(name: str, fn):
+    """节点包一层 span，输出就是节点返回的字段。interrupt 是控制流：记成"等待用户"，不记成错误。"""
+    def wrapper(state: State) -> State:
+        waiting = None
+        with tracing.observation(name, input={k: state.get(k) for k in NODE_INPUT.get(name, ())} or None) as obs:
+            try:
+                out = fn(state)
+            except GraphInterrupt as e:
+                waiting = e
+                tracing.safe_update(obs, output={"interrupt": "waiting for user"})
+            else:
+                tracing.safe_update(obs, output=tracing.small(_jsonable(out)),
+                                    **({"level": "ERROR", "status_message": out.get("message")}
+                                       if out.get("status") == "failed" else {}))
+        if waiting is not None:
+            raise waiting
+        return out
+    return wrapper
 
 
 # ---------------- 对外接口 ----------------
@@ -316,12 +346,22 @@ def _result(graph, config: dict, out: dict) -> dict:
             "pending_approval": pending.get("approve"), "pending_clarification": pending.get("ask_clarify")}
 
 
+def _trace_summary(res: dict) -> dict:
+    s = res["state"]
+    return {"status": s.get("status"), "conclusion": s.get("conclusion"), "execution": s.get("execution"),
+            "waiting_for": "approval" if res["pending_approval"] is not None
+            else "clarification" if res["pending_clarification"] is not None else None}
+
+
 def run(question: str, user_id: str, graph, thread_id: str | None = None) -> dict:
     """thread_id 同时用作审计日志的 trace_id。评测传入 "eval-" 前缀的 id，产生的提议保留不删，按前缀排除。"""
     thread_id = thread_id or uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
-    out = graph.invoke({"question": question, "user_id": user_id, "thread_id": thread_id}, config)
-    return _result(graph, config, out)
+    with tracing.request("ask", thread_id, user_id, input={"question": question}) as root:
+        out = graph.invoke({"question": question, "user_id": user_id, "thread_id": thread_id}, config)
+        res = _result(graph, config, out)
+        tracing.safe_update(root, output=_trace_summary(res))
+    return res
 
 
 def answer_clarification(thread_id: str, reply: str, graph) -> dict:
@@ -330,8 +370,11 @@ def answer_clarification(thread_id: str, reply: str, graph) -> dict:
     snapshot = graph.get_state(config)
     if not snapshot.next or "ask_clarify" not in snapshot.next:
         return {**_result(graph, config, {}), "already_processed": True}
-    out = graph.invoke(Command(resume=reply), config)
-    return _result(graph, config, out)
+    with tracing.request("clarify", thread_id, snapshot.values.get("user_id", ""), input={"reply": reply}) as root:
+        out = graph.invoke(Command(resume=reply), config)
+        res = _result(graph, config, out)
+        tracing.safe_update(root, output=_trace_summary(res))
+    return res
 
 
 def resume(thread_id: str, approver_id: str, approved: bool, graph, reason: str | None = None) -> dict:
@@ -345,5 +388,9 @@ def resume(thread_id: str, approver_id: str, approved: bool, graph, reason: str 
     actions.check_approver(approver_id, proposal["ad_group_id"])
     if not approved and not (reason and reason.strip()):
         raise actions.ApprovalError("rejection requires a reason")
-    out = graph.invoke(Command(resume={"approved": approved, "by": approver_id, "reason": reason}), config)
-    return _result(graph, config, out)
+    with tracing.request("approve", thread_id, approver_id,
+                         input={"approved": approved, "reason": reason, "proposal": proposal}) as root:
+        out = graph.invoke(Command(resume={"approved": approved, "by": approver_id, "reason": reason}), config)
+        res = _result(graph, config, out)
+        tracing.safe_update(root, output=_trace_summary(res))
+    return res

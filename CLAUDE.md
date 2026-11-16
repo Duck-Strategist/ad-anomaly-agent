@@ -33,7 +33,7 @@ uv run python -m datagen.load            # 导入数据库
 uv run pytest -q                         # 全部测试（需要数据库）
 uv run uvicorn adagent.web.server:app --port 8000   # 前端，打开 http://localhost:8000
 uv run python -m eval.check_reference    # 标准答案 vs 编译器（不调用模型）
-uv run python -m eval.run --system ours --model deepseek       # 评测；baseline / qwen / qwen-small 同理
+uv run python -m eval.run --system ours --model deepseek       # 评测；baseline / qwen / qwen-small 同理；加 --trace 才上报 Langfuse
 ```
 
 - **项目路径含中文时，`docker compose` 自己构建镜像会失败**（BuildKit 报 `x-docker-expose-session-sharedkey ... non-printable ASCII`），所以先单独 `docker build -t adagent-app .`，compose 发现镜像已存在就不再构建。克隆到英文路径时 `docker compose up -d --build` 可以直接用。改了代码要重新 `docker build`。
@@ -55,6 +55,7 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 | `adagent/workflow.py` | LangGraph 工作流：路由 → 问数 / 归因 → 解释 → 提议 → 审批（interrupt）→ 执行；`run()` / `resume()` |
 | `adagent/clarify.py` | 歧义反问：校验反问的词和选项、映射用户回答、兜底文案 |
 | `adagent/actions.py` | 唯一的写动作：提议、幂等执行暂停、拒绝 |
+| `adagent/tracing.py` | Langfuse 观测（SPEC Q24）：没有 key 或 `ADAGENT_TRACE=0` 就不记录；埋点出错只记日志；trace id 由 thread_id 决定 |
 | `adagent/web/` | 极简前端（SPEC Q22）：`server.py`（FastAPI，身份只来自签名 cookie，会话归属检查）+ `index.html`（原生 JS） |
 | `adagent/llm.py` | DeepSeek / 千问调用（OpenAI 兼容接口） |
 | `eval/judge/`、`eval/judge_sample.py` | judge 校准：标注说明 `rubric.md`、构造样本、批次文件、本地标注页 `label.html`（`*_key.json` 标注完成前不打开） |
@@ -77,5 +78,6 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 - **judge 校准已停止（2026-11-16）**：三批都没达到上线门槛（R2 κ 0.51 / 0.70 / 0.54，误报率 28% / 13% / 29%），judge 不上线。主要原因是单人标注漏看隐蔽编造，尺子本身不可靠。本方案是否编造改用人工标注报告：39 条里 1 条，95% 区间 0.1%–13.5%（RESULTS）。
 - **极简前端已完成（2026-11-16，SPEC Q22）**：FastAPI + 单页；演示登录写签名 cookie，请求体不带用户；会话只给发起人和提议所在店铺的审批人（"待我审批"列表）；"看过程"显示 MQL / SQL / 代码结论段 / 模型建议段；审计记录表；"同时发两次批准"演示幂等。测试 `tests/test_web.py`。注意：`pytest` 会清空审计表并把广告组全部恢复为 enabled。
 - **Docker Compose 已完成（2026-11-16，SPEC Q23）**：`Dockerfile`（seed 和 web 共用镜像，非 root，密钥不进镜像）+ compose 的 seed 服务（`datagen/seed.py`，空库才导入）。空数据卷实测：db 健康 → seed 导入 58,844 单后退出 → web 可提问；重启 seed 跳过。
+- **Langfuse 已接入（2026-11-16，SPEC Q24）**：用 Cloud 免费版（自托管 v4 要 7 个容器、建议 16GB，本机 Docker 只有约 3.7GB）。每次请求一个根 span、每个节点一个 span、每次模型调用一个 generation；提问和审批落在同一条 trace（id = thread_id = 审计日志 trace_id）。评测和测试默认不上报。页面"看过程"里有 trace 链接。
 - **下一步（M3）**：Langfuse、README / 演示脚本。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点）。
