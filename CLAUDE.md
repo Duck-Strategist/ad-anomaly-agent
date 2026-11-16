@@ -62,7 +62,7 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 | `eval/` | 评测题、评分器、基线（Text-to-SQL）、运行器；`eval/ground_truth/events.json` 是事件真值，只给评测用 |
 | `tests/` | 权限、编译器、评分器、分解算法的测试 |
 
-## 当前进度（2026-11-14）
+## 当前进度（2026-11-16）
 
 - **M1 完成**：数据层、语义层、编译器、NL→MQL、Text-to-SQL 基线、40 道评测题（陷阱题和越权题已人工审核）。
 - **M2 完成（2026-11-13）**：全集正式评测数字见 RESULTS 顶部"M2 全集正式评测"一节（简历用这一节）。查询类本方案 / DeepSeek 93.9%（基线 98.5%，差在 4 道 MQL 表达不了的月度对比），首次即对 93.9% vs 69.7%；跨模型稳定性目标未达标（相差 7.5 个百分点）；归因 pass^3 25/25（ReAct 基线 14/25）。
@@ -79,5 +79,6 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 - **极简前端已完成（2026-11-16，SPEC Q22）**：FastAPI + 单页；演示登录写签名 cookie，请求体不带用户；会话只给发起人和提议所在店铺的审批人（"待我审批"列表）；"看过程"显示 MQL / SQL / 代码结论段 / 模型建议段；审计记录表；"同时发两次批准"演示幂等。测试 `tests/test_web.py`。注意：`pytest` 会清空审计表并把广告组全部恢复为 enabled。
 - **Docker Compose 已完成（2026-11-16，SPEC Q23）**：`Dockerfile`（seed 和 web 共用镜像，非 root，密钥不进镜像）+ compose 的 seed 服务（`datagen/seed.py`，空库才导入）。空数据卷实测：db 健康 → seed 导入 58,844 单后退出 → web 可提问；重启 seed 跳过。
 - **Langfuse 已接入（2026-11-16，SPEC Q24）**：用 Cloud 免费版（自托管 v4 要 7 个容器、建议 16GB，本机 Docker 只有约 3.7GB）。每次请求一个根 span、每个节点一个 span、每次模型调用一个 generation；提问和审批落在同一条 trace（id = thread_id = 审计日志 trace_id）。评测和测试默认不上报。页面"看过程"里有 trace 链接。
-- **下一步（M3）**：Langfuse、README / 演示脚本。
+- **README 和演示脚本已完成（2026-11-16）**：`README.md`（中文，头部用 M2 正式数字并写明局限）、`docs/demo.md`（约 5 分钟讲稿 + 页面操作步骤，演示前先把广告组恢复成 enabled）。
+- **M3 全部完成（2026-11-16）**。之后可做：按 docs/demo.md 录一段演示视频；跨模型稳定性需要一套没参与设计的题、多次运行才能正式判断；开放问题见 SPEC 第十节。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点）。
