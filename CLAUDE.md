@@ -68,6 +68,6 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 - 评测工具：`eval/run.py`（查询 / 歧义 / 归因，含 ReAct 基线 `eval/baseline_react.py`）、`eval/summarize.py`（合并多次运行出表）、`eval/rescore.py`（修正 gold 后用已存结果重判，不重跑模型）。
 - **M3 相对时间已完成（2026-11-14，SPEC Q19）**：MQL 增加 `calendar`，日期由代码换算；时间范围检查；回答写出统计区间。留出集 25 题（`eval/questions/m3_time_holdout.yaml`）本方案 DeepSeek 23/25、千问 24/25；原 76 题上跨模型仍相差 7.6 个百分点，未达标（见 RESULTS 顶部）。
 - **M3 两段时间对比已完成（2026-11-14，SPEC Q20）**：`compare` 可写成一段时间且必须在本期之前；自然周 / 月的 `previous_period` 取同期。留出集 25 题 × 3 次（`eval/questions/m3_compare_holdout.yaml`），本方案两个模型 pass^3 都是 25/25；原 76 题上跨模型差距 3.0 个百分点（原题偏高，见 RESULTS 顶部）。
-- **M3 归因解释改成模板（2026-11-14，SPEC Q21）**：结论段由代码生成，模型只写建议段，judge 只评 R1 / R2。校准样本两批，每批 40 条，已组好（`eval/judge/batch1.json`、`batch2.json`），等人工标注。
-- **下一步（M3）**：人工标注 → judge prompt 和 κ / 召回率、极简前端、Docker Compose、Langfuse、README / 演示脚本。
+- **M3 归因解释改成模板（2026-11-14，SPEC Q21）**：结论段由代码生成，模型只写建议段，judge 只评 R1 / R2。校准样本两批，每批 40 条（`eval/judge/batch1.json`、`batch2.json`）。第一批已标注并跑完 judge（`eval/judge_run.py`）：人工独立标注 vs judge，R1 κ 0.84、R2 κ 0.51；分歧主要是人工漏标隐蔽编造，复核后 κ 1.0（偏高，不作依据，见 RESULTS）。
+- **下一步（M3）**：第二批独立标注 → 跑一次 judge（prompt 不改）判断是否上线、极简前端、Docker Compose、Langfuse、README / 演示脚本。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点）。

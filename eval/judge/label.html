@@ -130,6 +130,7 @@ function evidenceNumbers(ev) {
 
 function findSource(token, pct, evNums) {
   // token 有几位小数，就把依据里的数四舍五入到几位再比；带 % 时也试 ×100（比率 0.0955 → 9.55%）
+  token = token.replace(/,/g, "");   // 千分位逗号："9,142" → 9142
   const v = Math.abs(parseFloat(token)), d = (token.split(".")[1] || "").length, tol = 0.5 * 10 ** -d + 1e-9;
   for (const e of evNums) {
     if (Math.abs(e.value - v) <= tol) return e.where;
@@ -139,7 +140,7 @@ function findSource(token, pct, evNums) {
 }
 
 function markNumbers(text, evNums) {
-  const re = /([A-Z]{2}-(?:AG|SKU)\d+)|(\d{4}-\d{1,2}-\d{1,2})|(\d{1,2}\/\d{1,2})|(\d{1,2}月\d{1,2}[日号]?)|(\d{1,2}[日号])|(\d+(?:\.\d+)?)(%?)/g;
+  const re = /([A-Z]{2}-(?:AG|SKU)\d+)|(\d{4}-\d{1,2}-\d{1,2})|(\d{1,2}\/\d{1,2})|(\d{1,2}月\d{1,2}[日号]?)|(\d{1,2}[日号])|(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(%?)/g;
   let html = "", last = 0, m;
   while ((m = re.exec(text))) {
     html += esc(text.slice(last, m.index));
