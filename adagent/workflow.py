@@ -157,7 +157,8 @@ def build_graph(llm: LLM, checkpointer) -> Any:
                     "clarify": {**a.clarify, "asks": 0}}
         status = {"rows": "answered"}.get(a.status, a.status)
         return {"status": status, "message": a.message,
-                "answer": _jsonable({"rows": a.rows, "mql": a.mql, "sql": a.sql, "notes": a.notes})}
+                "answer": _jsonable({"rows": a.rows, "mql": a.mql, "sql": a.sql, "notes": a.notes,
+                                     "attempts": _attempts_view(a.attempts)})}
 
     def after_query(state: State) -> str:
         return "ask_clarify" if state["status"] == "awaiting_clarification" else END
@@ -297,6 +298,13 @@ def build_graph(llm: LLM, checkpointer) -> Any:
     for n in ("cannot_answer", "execute"):
         g.add_edge(n, END)
     return g.compile(checkpointer=checkpointer)
+
+
+def _attempts_view(attempts: list[dict]) -> list[dict]:
+    """自修正过程给页面看：每一轮模型输出了什么、哪里出错、回传给模型的提示。"""
+    return [{"attempt": a["attempt"], "output": a["output"],
+             "error_type": a.get("result", {}).get("error_type"), "errors": a.get("result", {}).get("errors"),
+             "feedback": a.get("feedback")} for a in attempts]
 
 
 # ---------------- 观测（SPEC Q24） ----------------

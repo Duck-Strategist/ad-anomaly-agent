@@ -148,7 +148,7 @@ def answer_question(question: str, user_id: str, llm: LLM, resolved_terms: dict[
         else:
             last_mql = call.parsed["mql"]
             result = query_metrics(last_mql, user_id)
-            record["result"] = {k: result.get(k) for k in ("ok", "error_type", "errors")}
+            record["result"] = {k: result.get(k) for k in ("ok", "error_type", "errors", "sql") if k in result}
             if result["ok"]:
                 notes = list(result["coverage_notes"])
                 if result["scope_limited"]:
@@ -168,8 +168,11 @@ def answer_question(question: str, user_id: str, llm: LLM, resolved_terms: dict[
     if attempts[-1].get("result", {}).get("error_type") == "out_of_range":
         return Answer("cannot_answer", message="没有这个时间段的数据：" + "; ".join(attempts[-1]["result"]["errors"]),
                       mql=last_mql, attempts=attempts)
-    # 超过重试上限：降级，返回最后一次的 MQL 和错误供人查看
-    return Answer("failed", message=attempts[-1].get("feedback", ""), mql=last_mql, attempts=attempts)
+    # 超过重试上限：降级，返回最后一次的 MQL、SQL（编译成功、执行出错时才有）和错误，供人查看（SPEC 第五节第 6 条）
+    last = attempts[-1].get("result", {})
+    errors = last.get("errors") or [attempts[-1].get("feedback", "")]
+    return Answer("failed", message=f"自动修正 {MAX_RETRIES} 次后仍然失败，已停止。最后一次的错误：" + "; ".join(errors),
+                  mql=last_mql, sql=last.get("sql"), attempts=attempts)
 
 
 if __name__ == "__main__":

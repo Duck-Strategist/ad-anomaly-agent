@@ -143,7 +143,7 @@ async function call(card, fn, retryThread) {
 function render(card, r) {
   const body = card.querySelector(".body"); let h = "";
   if (r.already_processed) h += `<div class="note">这一步已经处理过，这次请求没有重复执行。</div>`;
-  if (r.answer) h += renderAnswer(r.answer);
+  if (r.answer) h += renderAnswer(r.answer, r.status);
   if (r.facts) {
     h += `<div class="label">结论（代码按模板生成，数字来自确定性计算）</div><div class="facts">${esc(r.facts)}</div>`;
     if (r.advice) h += `<div class="label">建议和说明（模型写的；其中的数字经代码检查）</div><div class="advice">${esc(r.advice)}</div>`;
@@ -151,6 +151,8 @@ function render(card, r) {
   }
   if (["refused", "cannot_answer", "failed", "unresolved"].includes(r.status) && r.message)
     h += `<div class="msg-bad"><span class="tag">${esc({ refused:"无权限", cannot_answer:"无法回答", failed:"出错", unresolved:"未确定口径" }[r.status])}</span>${esc(r.message)}</div>`;
+  if (r.status === "failed" && r.answer)
+    h += `<div class="note">已达到重试上限，降级为输出最后一次的 MQL${r.answer.sql ? " 和 SQL" : ""}，展开"看过程"可以查看每一轮的输出和错误。</div>`;
   if (r.facts || r.conclusion || r.answer)
     h += `<details><summary>看过程</summary>${processView(r)}</details>`;
   body.innerHTML = h;
@@ -158,10 +160,10 @@ function render(card, r) {
   if (r.proposal) body.appendChild(approvalView(card, r));
 }
 
-function renderAnswer(a) {
+function renderAnswer(a, status) {
   let h = (a.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");   // 范围说明放在最前面（SPEC Q17）
   const rows = a.rows || [];
-  if (!rows.length) return h + `<div class="muted">没有数据。</div>`;
+  if (!rows.length) return h + (status === "answered" ? `<div class="muted">没有数据。</div>` : "");
   const cols = Object.keys(rows[0]);
   h += `<table><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr>`;
   for (const row of rows) {
@@ -180,6 +182,14 @@ function processView(r) {
   if (r.intent) h += `<div class="muted">路由：${esc(r.intent)} · thread_id：${esc(r.thread_id)}${r.trace_url ? ` · <a href="${esc(r.trace_url)}" target="_blank" rel="noopener">在 Langfuse 里看完整 trace</a>` : ""}</div>`;
   if (r.answer?.mql) h += `<div class="label">模型输出的 MQL（JSON，模型不写 SQL）</div><pre>${esc(JSON.stringify(r.answer.mql, null, 2))}</pre>`;
   if (r.answer?.sql) h += `<div class="label">编译器生成的 SQL（权限条件由编译器注入，参数绑定）</div>${r.answer.sql.map(s => `<pre>${esc(s)}</pre>`).join("")}`;
+  const tries = r.answer?.attempts || [];
+  if (tries.length > 1 || r.status === "failed") {
+    h += `<div class="label">自修正过程（共 ${tries.length} 轮；出错时把错误原文回传给模型重写）</div>`;
+    h += tries.map(t => `<div class="muted">第 ${t.attempt + 1} 轮${t.error_type ? `：${esc(t.error_type)} 错误` : t.feedback ? "：输出不合规" : "：成功"}</div>
+      <pre>${esc(t.output)}</pre>${t.feedback ? (r.status === "failed" && t.attempt === tries.length - 1
+        ? `<pre>最后一次的错误（已达上限，没有再回传）：${esc((t.errors || [t.feedback]).join("; "))}</pre>`
+        : `<pre>回传给模型：${esc(t.feedback)}</pre>`) : ""}`).join("");
+  }
   if (r.basis) h += `<div class="label">口径</div><pre>${esc(r.basis)}</pre>`;
   if (r.conclusion) h += `<div class="label">结构化结论</div><pre>${esc(JSON.stringify(r.conclusion, null, 2))}</pre>`;
   if (r.advice_check) h += `<div class="label">建议段数字检查</div><pre>${esc(JSON.stringify(r.advice_check))}</pre>`;

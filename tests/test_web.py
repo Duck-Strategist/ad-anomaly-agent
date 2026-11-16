@@ -90,3 +90,26 @@ def test_week_ranges_are_clipped_to_window():
               "rows": [{"week": "2026-09-28"}, {"week": "2026-10-05"}, {"week": "2026-10-26"}]}
     assert server.week_ranges(answer, date(2026, 11, 8)) == {
         "2026-09-28": "10-01~10-04", "2026-10-05": "10-05~10-11", "2026-10-26": "10-26~10-31"}
+
+
+def test_degrade_returns_last_sql_and_attempts(monkeypatch):
+    """SPEC 第五节第 6 条：超过重试上限后降级，返回最后一次的 MQL、SQL 和每一轮的过程。"""
+    from adagent import nl2mql
+    from adagent.llm import LLMCall
+    from adagent.workflow import _attempts_view
+
+    mql = {"metrics": ["ad_spend"], "filters": {"shop": ["US"]}, "time": {"range": "last_7_days"}}
+
+    class AlwaysSameMQL:
+        def chat_json(self, messages):
+            out = {"mql": mql}
+            return LLMCall("fake", messages, '{"mql": "..."}', 0, 0, 0.0, parsed=out)
+
+    monkeypatch.setattr(nl2mql, "query_metrics", lambda m, u: {
+        "ok": False, "error_type": "execution", "errors": ["canceling statement due to statement timeout"],
+        "mql": m, "sql": ["SELECT 1 /* last */"]})
+    a = nl2mql.answer_question("美国店上周花费", "u_admin", AlwaysSameMQL())
+    assert a.status == "failed" and a.mql == mql and a.sql == ["SELECT 1 /* last */"]
+    assert "statement timeout" in a.message and len(a.attempts) == nl2mql.MAX_RETRIES + 1
+    view = _attempts_view(a.attempts)
+    assert [v["error_type"] for v in view] == ["execution"] * 3 and all(v["feedback"] for v in view)
