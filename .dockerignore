@@ -1,0 +1,9 @@
+# 密钥只在运行时用 env_file 注入，绝不打进镜像（SPEC Q23）
+.env
+.venv/
+__pycache__/
+*.pyc
+.git/
+.claude/
+eval/runs/
+datagen/out/

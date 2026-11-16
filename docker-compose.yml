@@ -1,3 +1,5 @@
+# 一条命令启动：docker compose up -d --build，然后打开 http://localhost:8000（SPEC Q23）
+# 启动顺序：db 健康检查通过 → seed 导入数据（库里已有数据就跳过）并退出 → web 启动
 services:
   db:
     image: postgres:16.4
@@ -6,7 +8,7 @@ services:
       POSTGRES_USER: app_admin
       POSTGRES_PASSWORD: admin_dev
     ports:
-      - "54329:5432"   # 宿主机用 54329，避免和本机可能已有的 PostgreSQL 冲突
+      - "54329:5432"   # 宿主机用 54329，避免和本机可能已有的 PostgreSQL 冲突；容器之间用 db:5432
     volumes:
       - pgdata:/var/lib/postgresql/data
       # 容器第一次初始化（数据卷为空）时，按文件名顺序执行这里的 .sql
@@ -16,6 +18,31 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  seed:
+    build: .
+    image: adagent-app   # seed 和 web 共用同一个镜像，只构建一次
+    command: ["python", "-m", "datagen.seed"]
+    env_file: .env
+    environment: &in_network   # 容器里连数据库用服务名和容器端口，覆盖 .env 里给本机用的 localhost:54329
+      PG_HOST: db
+      PG_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build: .
+    image: adagent-app
+    env_file: .env
+    environment: *in_network
+    ports:
+      - "8000:8000"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   pgdata:

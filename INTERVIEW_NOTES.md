@@ -271,3 +271,11 @@
 - **一句话**：前端的检查只为体验；"我是谁"由服务端决定，"只执行一次"由数据库决定。
 - **追问**：演示登录谁都能选 u_admin，这算什么安全？→ 不算认证，页面和 README 都写明了。它的价值是代码路径：接口不信任请求里的身份，换真实认证只改登录一处。
 - **追问**：既然数据库能挡住，为什么还要在图层面检查？→ 正常的重复点击（不是并发）在图层面就能直接返回上次结果，不必再跑一遍执行节点；并发时靠数据库兜底。两层各管一种情况。
+
+### 30. Docker Compose：启动顺序、数据怎么进库，以及一个只在中文路径下出现的构建失败
+- **情境**：目标是拿到代码、准备好 `.env`，一条 `docker compose up` 就能打开页面（SPEC Q23）。
+- **设计**：三个服务 db → seed → web。seed 和 web 用同一个镜像；seed 等数据库健康检查通过（`service_healthy`）才启动，web 等 seed 成功退出（`service_completed_successfully`）才启动。seed 只在空库时生成并导入，有数据就跳过，避免每次 `up` 冲掉演示状态（已暂停的广告组）。容器之间用服务名 `db:5432`，不是本机的 `localhost:54329`；`.env` 运行时注入，`.dockerignore` 排除，实测镜像里没有 `.env`、进程是非 root 用户。
+- **实测**（2026-11-16，用单独的项目名从空数据卷启动，不碰原来的库）：db 健康 → seed 导入（订单 58,844 行，和本机一致，因为固定种子）后退出 0 → web 健康，从容器里问一道归因题，结论和本机一致；重启 seed 打印"已有数据，跳过"。
+- **踩到的坑**：`docker compose build` 报 `header key "x-docker-expose-session-sharedkey" contains value with non-printable ASCII characters`，而 `docker build` 正常。怀疑是项目路径里的中文被放进了请求头；把同样的文件复制到全英文路径下，compose 构建成功，确认了原因。处理：不改目录名，本机先 `docker build -t adagent-app .`，compose 看到镜像已存在就不构建；README 写明。
+- **一句话**：`depends_on` 默认只等进程启动，不等服务可用；要等就写健康检查条件。
+- **追问**：seed 为什么不放进数据库的 init 脚本？→ init 脚本只在数据卷为空时执行、只能跑 SQL，而数据是 Python 按固定种子生成的；放在单独服务里，生成逻辑只有一份，和本机 `datagen` 共用。

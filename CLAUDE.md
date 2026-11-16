@@ -26,7 +26,8 @@
 ## 常用命令
 
 ```bash
-docker compose up -d --wait              # 先确认 Docker Desktop 在运行
+docker compose up -d --wait db           # 本机开发只起数据库（先确认 Docker Desktop 在运行）
+docker build -t adagent-app . && docker compose up -d --wait   # 全套：db → seed（空库才导入）→ web，打开 http://localhost:8000
 uv run python -m datagen.generate        # 生成合成数据（固定种子）
 uv run python -m datagen.load            # 导入数据库
 uv run pytest -q                         # 全部测试（需要数据库）
@@ -35,6 +36,8 @@ uv run python -m eval.check_reference    # 标准答案 vs 编译器（不调用
 uv run python -m eval.run --system ours --model deepseek       # 评测；baseline / qwen / qwen-small 同理
 ```
 
+- **项目路径含中文时，`docker compose` 自己构建镜像会失败**（BuildKit 报 `x-docker-expose-session-sharedkey ... non-printable ASCII`），所以先单独 `docker build -t adagent-app .`，compose 发现镜像已存在就不再构建。克隆到英文路径时 `docker compose up -d --build` 可以直接用。改了代码要重新 `docker build`。
+- compose 的 web 和本机 `uvicorn`（`.claude/launch.json`）都用 8000 端口，同时只能开一个。
 - Windows 终端跑评测时加 `PYTHONIOENCODING=utf-8`，否则中文输出乱码。
 - `db/init/*.sql` 只在数据卷为空时执行；改了建表脚本要 `docker compose down -v` 后重建并重新导入。已有数据库上加新脚本，可以用 `docker compose exec -T db psql -U app_admin -d adagent < db/init/00X_xxx.sql` 单独执行。
 - `.env` 存 API key 和数据库密码，已被忽略，不要读取或打印 key 的值。模型名配置在 `.env`（主力 DeepSeek，judge 千问，调试 `qwen-flash`）。
@@ -73,5 +76,6 @@ uv run python -m eval.run --system ours --model deepseek       # 评测；baseli
 - **M3 归因解释改成模板（2026-11-14，SPEC Q21）**：结论段由代码生成，模型只写建议段，judge 只评 R1 / R2。校准样本两批，每批 40 条（`eval/judge/batch1.json`、`batch2.json`）。第一批已标注并跑完 judge（`eval/judge_run.py`）：人工独立标注 vs judge，R1 κ 0.84、R2 κ 0.51；分歧主要是人工漏标隐蔽编造，复核后 κ 1.0（偏高，不作依据，见 RESULTS）。
 - **judge 校准已停止（2026-11-16）**：三批都没达到上线门槛（R2 κ 0.51 / 0.70 / 0.54，误报率 28% / 13% / 29%），judge 不上线。主要原因是单人标注漏看隐蔽编造，尺子本身不可靠。本方案是否编造改用人工标注报告：39 条里 1 条，95% 区间 0.1%–13.5%（RESULTS）。
 - **极简前端已完成（2026-11-16，SPEC Q22）**：FastAPI + 单页；演示登录写签名 cookie，请求体不带用户；会话只给发起人和提议所在店铺的审批人（"待我审批"列表）；"看过程"显示 MQL / SQL / 代码结论段 / 模型建议段；审计记录表；"同时发两次批准"演示幂等。测试 `tests/test_web.py`。注意：`pytest` 会清空审计表并把广告组全部恢复为 enabled。
-- **下一步（M3）**：Docker Compose、Langfuse、README / 演示脚本。
+- **Docker Compose 已完成（2026-11-16，SPEC Q23）**：`Dockerfile`（seed 和 web 共用镜像，非 root，密钥不进镜像）+ compose 的 seed 服务（`datagen/seed.py`，空库才导入）。空数据卷实测：db 健康 → seed 导入 58,844 单后退出 → web 可提问；重启 seed 跳过。
+- **下一步（M3）**：Langfuse、README / 演示脚本。
 - 开放问题见 SPEC 第十节（Q14：第 4 天检查点）。
