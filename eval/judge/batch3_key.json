@@ -1,0 +1,222 @@
+{
+  "B3-01": {
+    "source": "baseline",
+    "run": "AT07#3"
+  },
+  "B3-02": {
+    "source": "baseline",
+    "run": "AT17#1"
+  },
+  "B3-03": {
+    "source": "ours",
+    "run": "AT15#3"
+  },
+  "B3-04": {
+    "source": "constructed",
+    "run": "AT25#2",
+    "kind": "r2_maybe",
+    "intended": {
+      "r1": true,
+      "r2": false
+    }
+  },
+  "B3-05": {
+    "source": "constructed",
+    "run": "AT22#2",
+    "kind": "r2_overreach",
+    "intended": {
+      "r1": true,
+      "r2": false
+    }
+  },
+  "B3-06": {
+    "source": "constructed",
+    "run": "AT19#3",
+    "kind": "r2_maybe",
+    "intended": {
+      "r1": true,
+      "r2": false
+    }
+  },
+  "B3-07": {
+    "source": "baseline",
+    "run": "AT05#1"
+  },
+  "B3-08": {
+    "source": "ours",
+    "run": "AT18#3"
+  },
+  "B3-09": {
+    "source": "baseline",
+    "run": "AT17#3"
+  },
+  "B3-10": {
+    "source": "constructed",
+    "run": "AT24#2",
+    "kind": "r1_contradiction",
+    "intended": {
+      "r1": false,
+      "r2": true
+    }
+  },
+  "B3-11": {
+    "source": "ours",
+    "run": "AT09#3"
+  },
+  "B3-12": {
+    "source": "ours",
+    "run": "AT19#1"
+  },
+  "B3-13": {
+    "source": "baseline",
+    "run": "AT13#2"
+  },
+  "B3-14": {
+    "source": "baseline",
+    "run": "AT08#2"
+  },
+  "B3-15": {
+    "source": "ours",
+    "run": "AT01#2"
+  },
+  "B3-16": {
+    "source": "constructed",
+    "run": "AT21#2",
+    "kind": "r2_overreach",
+    "intended": {
+      "r1": true,
+      "r2": false
+    }
+  },
+  "B3-17": {
+    "source": "baseline",
+    "run": "AT25#2"
+  },
+  "B3-18": {
+    "source": "ours",
+    "run": "AT09#2"
+  },
+  "B3-19": {
+    "source": "baseline",
+    "run": "AT10#1"
+  },
+  "B3-20": {
+    "source": "ours",
+    "run": "AT05#3"
+  },
+  "B3-21": {
+    "source": "constructed",
+    "run": "AT07#2",
+    "kind": "r2_obvious",
+    "intended": {
+      "r1": true,
+      "r2": false
+    }
+  },
+  "B3-22": {
+    "source": "ours",
+    "run": "AT14#1"
+  },
+  "B3-23": {
+    "source": "baseline",
+    "run": "AT21#1"
+  },
+  "B3-24": {
+    "source": "constructed",
+    "run": "AT11#1",
+    "kind": "r1_contradiction",
+    "intended": {
+      "r1": false,
+      "r2": false
+    }
+  },
+  "B3-25": {
+    "source": "ours",
+    "run": "AT17#2"
+  },
+  "B3-26": {
+    "source": "ours",
+    "run": "AT09#1"
+  },
+  "B3-27": {
+    "source": "ours",
+    "run": "AT12#2"
+  },
+  "B3-28": {
+    "source": "baseline",
+    "run": "AT23#3"
+  },
+  "B3-29": {
+    "source": "baseline",
+    "run": "AT02#3"
+  },
+  "B3-30": {
+    "source": "ours",
+    "run": "AT06#3"
+  },
+  "B3-31": {
+    "source": "baseline",
+    "run": "AT15#2"
+  },
+  "B3-32": {
+    "source": "constructed",
+    "run": "AT22#1",
+    "kind": "r2_common_sense",
+    "intended": {
+      "r1": true,
+      "r2": false
+    }
+  },
+  "B3-33": {
+    "source": "baseline",
+    "run": "AT01#2"
+  },
+  "B3-34": {
+    "source": "constructed",
+    "run": "AT03#3",
+    "kind": "r1_contradiction",
+    "intended": {
+      "r1": false,
+      "r2": true
+    }
+  },
+  "B3-35": {
+    "source": "constructed",
+    "run": "AT06#2",
+    "kind": "r2_overreach",
+    "intended": {
+      "r1": true,
+      "r2": false
+    }
+  },
+  "B3-36": {
+    "source": "baseline",
+    "run": "AT04#1"
+  },
+  "B3-37": {
+    "source": "baseline",
+    "run": "AT09#1"
+  },
+  "B3-38": {
+    "source": "constructed",
+    "run": "AT19#2",
+    "kind": "r2_obvious",
+    "intended": {
+      "r1": true,
+      "r2": false
+    }
+  },
+  "B3-39": {
+    "source": "constructed",
+    "run": "AT02#1",
+    "kind": "r2_common_sense",
+    "intended": {
+      "r1": true,
+      "r2": false
+    }
+  },
+  "B3-40": {
+    "source": "ours",
+    "run": "AT14#3"
+  }
+}

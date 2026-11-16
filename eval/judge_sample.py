@@ -1,7 +1,7 @@
 """judge 校准样本：抽样 → （人工构造错误样本）→ 组批。SPEC Q21 / 第九节。
 
 每批 40 条：本方案真实 13 + 基线真实 15 + 构造 12（R2 否 9：明显 2、"可能"式 2、像常识 2、过度延伸 3；R1 否 3）。
-构造样本以本方案真实的建议段为底稿，底稿不和本方案真实样本重复。共两批，第二批留给改 prompt 之后验证。
+构造样本以本方案真实的建议段为底稿，底稿不和本方案真实样本重复。共三批，顺序切片，加批次不影响前面的批。
 
 用法：
   uv run python -m eval.judge_sample pick --ours 运行记录.jsonl --baseline 运行记录.jsonl
@@ -25,7 +25,7 @@ DIR = Path(__file__).resolve().parent / "judge"
 SEED = 20261114
 PER_BATCH = {"ours": 13, "baseline": 15, "construct": 12}
 CONSTRUCT_PLAN = {"r2_obvious": 2, "r2_maybe": 2, "r2_common_sense": 2, "r2_overreach": 3, "r1_contradiction": 3}
-BATCHES = 2
+BATCHES = 3   # 第三批：第二批之后补了 rubric，用新数据验证（CHANGELOG 2026-11-15）
 
 
 def _load(path: str) -> dict[str, dict]:

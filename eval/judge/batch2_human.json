@@ -1,0 +1,167 @@
+{
+  "batch": "batch2",
+  "labeled_at": "2026-11-16T06:46:56.443Z",
+  "labels": {
+    "B2-01": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-02": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-03": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-04": {
+      "r1": true,
+      "r2": false
+    },
+    "B2-05": {
+      "r1": true,
+      "r2": true,
+      "note": "拿不准：单组就消耗了2296美元预算我不知道怎么具体算，工具查询的结果多有杂"
+    },
+    "B2-06": {
+      "r1": false,
+      "r2": true
+    },
+    "B2-07": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-08": {
+      "r1": false,
+      "r2": true
+    },
+    "B2-09": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-10": {
+      "r2": false,
+      "r1": true
+    },
+    "B2-11": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-12": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-13": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-14": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-15": {
+      "r1": true,
+      "r2": false
+    },
+    "B2-16": {
+      "r1": true,
+      "r2": false
+    },
+    "B2-17": {
+      "r1": true,
+      "r2": false
+    },
+    "B2-18": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-19": {
+      "r1": true,
+      "r2": false
+    },
+    "B2-20": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-21": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-22": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-23": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-24": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-25": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-26": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-27": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-28": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-29": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-30": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-31": {
+      "r1": false,
+      "r2": true
+    },
+    "B2-32": {
+      "r1": true,
+      "r2": false
+    },
+    "B2-33": {
+      "r1": true,
+      "r2": false
+    },
+    "B2-34": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-35": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-36": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-37": {
+      "r1": true,
+      "r2": false
+    },
+    "B2-38": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-39": {
+      "r1": true,
+      "r2": true
+    },
+    "B2-40": {
+      "r1": true,
+      "r2": false
+    }
+  }
+}
