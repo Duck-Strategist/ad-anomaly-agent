@@ -4,17 +4,21 @@ version = "0.1.0"
 description = "跨境卖家经营异常归因与处置 Agent"
 requires-python = ">=3.12"
 dependencies = [
-    "psycopg[binary]>=3.2",
+    "psycopg[binary,pool]>=3.2",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
     "pydantic>=2.7",
     "openai>=1.40",
     "langgraph>=1.2.20",
     "langgraph-checkpoint-postgres>=3.2.0",
+    "fastapi>=0.163.1",
+    "uvicorn[standard]>=0.54.0",
+    "itsdangerous>=2.2.0",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=8.0",
 ]
 

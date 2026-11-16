@@ -155,7 +155,7 @@ def build_graph(llm: LLM, checkpointer) -> Any:
                     "clarify": {**a.clarify, "asks": 0}}
         status = {"rows": "answered"}.get(a.status, a.status)
         return {"status": status, "message": a.message,
-                "answer": _jsonable({"rows": a.rows, "mql": a.mql, "notes": a.notes})}
+                "answer": _jsonable({"rows": a.rows, "mql": a.mql, "sql": a.sql, "notes": a.notes})}
 
     def after_query(state: State) -> str:
         return "ask_clarify" if state["status"] == "awaiting_clarification" else END

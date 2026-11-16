@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>经营异常归因 Agent</title>
+<style>
+  :root { --bg:#f6f6f3; --card:#fff; --ink:#1e1e1c; --muted:#6c6b66; --line:#e3e2dd; --accent:#2f5d8a;
+          --ok:#2e7d4f; --warn:#a86b00; --bad:#b3412e; --code:#f1f0ec; --model:#f3eefb; --modelline:#7a5bb5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151514; --card:#1e1e1c; --ink:#ecebe6; --muted:#a09f99; --line:#34332f;
+          --accent:#7fa8d1; --ok:#6cc093; --warn:#e0a84a; --bad:#e3836f; --code:#262624; --model:#272333; --modelline:#a98bdf; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.6 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { position:sticky; top:0; z-index:2; background:var(--bg); border-bottom:1px solid var(--line);
+           padding:10px 16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header strong { margin-right:auto; }
+  main { max-width:960px; margin:0 auto; padding:16px; }
+  button, select, input, textarea { font:inherit; color:var(--ink); background:var(--card); border:1px solid var(--line); border-radius:6px; }
+  button { padding:6px 12px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--bad); }
+  button:disabled { opacity:.45; cursor:default; }
+  select, input, textarea { padding:6px 8px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin:12px 0; }
+  .q { font-weight:600; margin-bottom:8px; }
+  .tag { display:inline-block; font-size:12px; padding:0 6px; border-radius:4px; border:1px solid var(--line); color:var(--muted); margin-right:6px; }
+  .note { border-left:3px solid var(--warn); padding:4px 10px; margin:6px 0; background:color-mix(in srgb, var(--warn) 8%, transparent); }
+  .msg-bad { border-left:3px solid var(--bad); padding:4px 10px; }
+  .facts { border-left:3px solid var(--accent); padding:4px 12px; white-space:pre-wrap; margin:8px 0; }
+  .advice { border-left:3px solid var(--modelline); background:var(--model); padding:6px 12px; white-space:pre-wrap; margin:8px 0; }
+  .label { font-size:12px; color:var(--muted); margin-top:10px; }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin:8px 0; display:block; overflow-x:auto; }
+  th, td { border-bottom:1px solid var(--line); padding:4px 8px; text-align:left; white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  details { margin-top:10px; }
+  summary { cursor:pointer; color:var(--accent); font-size:14px; }
+  pre { background:var(--code); padding:8px 10px; border-radius:6px; overflow-x:auto; font:12.5px/1.5 ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; }
+  .approval { border:1px solid var(--accent); border-radius:8px; padding:10px 12px; margin-top:10px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  .status-executed { color:var(--ok); } .status-rejected, .status-stale, .status-expired { color:var(--bad); } .status-pending { color:var(--warn); }
+  #askbox { display:flex; gap:8px; margin:12px 0; }
+  #askbox input { flex:1; min-width:0; }
+  .examples button { font-size:13px; padding:2px 8px; margin:2px 4px 2px 0; }
+  .spinner { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <strong>经营异常归因 Agent <span class="muted">演示</span></strong>
+  <label class="muted" for="user">演示登录</label>
+  <select id="user"><option value="">选择用户…</option></select>
+  <span id="perm" class="muted"></span>
+</header>
+<main>
+  <p class="muted">这是<b>模拟登录</b>：下拉框里谁都能选，只用来演示权限边界。服务端把选中的用户写进签名 cookie，之后所有请求都按 cookie 里的用户查权限，请求里不带用户 ID。生产环境要换成真实认证。</p>
+  <div id="askbox">
+    <input id="question" placeholder="例如：美国店上周广告花费多少？ / JP-AG08 那周为什么 ROI 变差了？" maxlength="500">
+    <button id="send" class="primary">提问</button>
+  </div>
+  <div class="examples muted">试试：</div>
+  <div id="pendingbox" class="card" hidden>
+    <div class="row" style="margin-top:0"><b style="margin-right:auto">待我审批</b><button id="refreshPending">刷新</button></div>
+    <div class="muted">你是审批人的店铺下、24 小时内还没处理的暂停提议，包括别人发起的。打开后可以看到完整结论再决定。</div>
+    <div id="pending"></div>
+  </div>
+  <div id="turns"></div>
+  <div class="card">
+    <div class="row" style="margin-top:0"><b style="margin-right:auto">审批记录</b><button id="refresh">刷新</button></div>
+    <div class="muted">当前用户有权限的店铺下最近 20 条（不含评测产生的记录）。"广告组现状"是数据库里此刻的状态。</div>
+    <div id="audit"></div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const EXAMPLES = ["美国店上周广告花费多少？", "英国店 10 月每周的净 ROAS", "JP-AG08 10 月 19 日到 25 日那周为什么 ROI 变差了？",
+                  "美国店 11 月 2 日到 8 日这周广告效果怎么样？", "上个月销售额是多少？"];
+const CAUSE = { cvr:"转化率下降", cpc:"点击成本上升", ad_aov:"广告客单价下降", refund:"退款增加" };
+const EXEC = { executed:"已执行：广告组已暂停", rejected:"已拒绝（未执行，已留痕）", stale:"未执行：广告组状态已经变了",
+               expired:"未执行：提议已过期，需要重新归因", pending:"待审批", approved:"已批准" };
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : `HTTP ${r.status}`);
+  return data;
+}
+
+// ---------- 登录 ----------
+async function initUsers() {
+  const users = await api("/api/users"), me = await api("/api/me");
+  for (const [id, perms] of Object.entries(users)) {
+    const o = document.createElement("option");
+    o.value = id; o.textContent = `${id}（${perms.map(p => `${p.shop}·${p.role === "approver" ? "可审批" : "只读"}`).join("，")}）`;
+    $("user").appendChild(o);
+  }
+  if (me.user_id) { $("user").value = me.user_id; showPerm(me); refreshLists(); }
+}
+function showPerm(me) { $("perm").textContent = me.user_id ? `当前：${me.user_id}` : ""; }
+$("user").onchange = async e => {
+  if (!e.target.value) return;
+  $("turns").innerHTML = ""; $("send").disabled = true;   // 切换用户期间不能提问，避免请求用旧身份发出
+  document.querySelectorAll(".examples button").forEach(b => b.disabled = true);
+  try { showPerm(await api("/api/login", { user_id:e.target.value })); refreshLists(); }
+  finally { $("send").disabled = false; document.querySelectorAll(".examples button").forEach(b => b.disabled = false); }
+};
+
+// ---------- 提问 ----------
+EXAMPLES.forEach(q => { const b = document.createElement("button"); b.textContent = q; b.onclick = () => { $("question").value = q; ask(); }; document.querySelector(".examples").appendChild(b); });
+$("send").onclick = ask;
+$("question").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+
+async function ask() {
+  const q = $("question").value.trim(); if (!q) return;
+  const card = newCard(q); $("send").disabled = true;
+  await call(card, () => api("/api/ask", { question:q }));
+  $("send").disabled = false; $("question").value = "";
+}
+
+function newCard(q) {
+  const card = document.createElement("div"); card.className = "card";
+  card.innerHTML = `<div class="q">${esc(q)}</div><div class="body"></div>`;
+  $("turns").prepend(card); return card;
+}
+
+async function call(card, fn, retryThread) {
+  const body = card.querySelector(".body");
+  body.innerHTML = `<div class="spinner">分析中…（归因大约需要 10–30 秒）</div>`;
+  try { render(card, await fn()); }
+  catch (e) {
+    body.innerHTML = `<div class="msg-bad">${esc(e.message)}</div>`;
+    if (retryThread) {   // 请求中断：结果可能已经在服务端的 checkpoint 里
+      const b = document.createElement("button"); b.textContent = "取回结果"; b.style.marginTop = "8px";
+      b.onclick = () => call(card, () => api(`/api/thread/${retryThread}`), retryThread);
+      body.appendChild(b);
+    }
+  }
+}
+
+// ---------- 渲染 ----------
+function render(card, r) {
+  const body = card.querySelector(".body"); let h = "";
+  if (r.already_processed) h += `<div class="note">这一步已经处理过，这次请求没有重复执行。</div>`;
+  if (r.answer) h += renderAnswer(r.answer);
+  if (r.facts) {
+    h += `<div class="label">结论（代码按模板生成，数字来自确定性计算）</div><div class="facts">${esc(r.facts)}</div>`;
+    if (r.advice) h += `<div class="label">建议和说明（模型写的；其中的数字经代码检查）</div><div class="advice">${esc(r.advice)}</div>`;
+    else if (r.advice_check?.dropped) h += `<div class="note">模型写的建议里出现了结论里没有的数字，重写一次后仍有，已丢弃。</div>`;
+  }
+  if (["refused", "cannot_answer", "failed", "unresolved"].includes(r.status) && r.message)
+    h += `<div class="msg-bad"><span class="tag">${esc({ refused:"无权限", cannot_answer:"无法回答", failed:"出错", unresolved:"未确定口径" }[r.status])}</span>${esc(r.message)}</div>`;
+  if (r.facts || r.conclusion || r.answer)
+    h += `<details><summary>看过程</summary>${processView(r)}</details>`;
+  body.innerHTML = h;
+  if (r.clarification) body.appendChild(clarifyView(card, r));
+  if (r.proposal) body.appendChild(approvalView(card, r));
+}
+
+function renderAnswer(a) {
+  let h = (a.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");   // 范围说明放在最前面（SPEC Q17）
+  const rows = a.rows || [];
+  if (!rows.length) return h + `<div class="muted">没有数据。</div>`;
+  const cols = Object.keys(rows[0]);
+  h += `<table><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr>`;
+  for (const row of rows) {
+    h += "<tr>" + cols.map(c => {
+      const v = row[c];
+      if (c === "week" && a.week_ranges?.[v]) return `<td>${esc(v)} <span class="muted">（实际 ${esc(a.week_ranges[v])}）</span></td>`;
+      return typeof v === "number" ? `<td class="num">${esc(fmt(v))}</td>` : `<td>${esc(v)}</td>`;
+    }).join("") + "</tr>";
+  }
+  return h + "</table>";
+}
+const fmt = v => Number.isInteger(v) ? v.toLocaleString() : (Math.abs(v) < 1 ? v.toFixed(4) : v.toLocaleString(undefined, { maximumFractionDigits:2 }));
+
+function processView(r) {
+  let h = "";
+  if (r.intent) h += `<div class="muted">路由：${esc(r.intent)} · thread_id：${esc(r.thread_id)}</div>`;
+  if (r.answer?.mql) h += `<div class="label">模型输出的 MQL（JSON，模型不写 SQL）</div><pre>${esc(JSON.stringify(r.answer.mql, null, 2))}</pre>`;
+  if (r.answer?.sql) h += `<div class="label">编译器生成的 SQL（权限条件由编译器注入，参数绑定）</div>${r.answer.sql.map(s => `<pre>${esc(s)}</pre>`).join("")}`;
+  if (r.basis) h += `<div class="label">口径</div><pre>${esc(r.basis)}</pre>`;
+  if (r.conclusion) h += `<div class="label">结构化结论</div><pre>${esc(JSON.stringify(r.conclusion, null, 2))}</pre>`;
+  if (r.advice_check) h += `<div class="label">建议段数字检查</div><pre>${esc(JSON.stringify(r.advice_check))}</pre>`;
+  return h;
+}
+
+function clarifyView(card, r) {
+  const c = r.clarification, div = document.createElement("div"); div.className = "approval";
+  div.innerHTML = `<div>${esc(c.question)}</div><div class="row"></div>
+    <div class="row"><input placeholder="或者用自己的话回答" style="flex:1"><button>回答</button></div>`;
+  const send = reply => call(card, () => api("/api/clarify", { thread_id:r.thread_id, reply }), r.thread_id);
+  for (const o of c.options) {
+    const b = document.createElement("button"); b.textContent = `${o.desc}（${o.metric}）`;
+    b.onclick = () => send(o.metric);   // 按钮发的是指标名，服务端直接采用
+    div.querySelector(".row").appendChild(b);
+  }
+  const [input, btn] = div.querySelectorAll(".row")[1].children;
+  btn.onclick = () => input.value.trim() && send(input.value.trim());
+  return div;
+}
+
+function approvalView(card, r) {
+  const p = r.proposal, div = document.createElement("div"); div.className = "approval";
+  const reason = p.params?.reason || "";
+  let h = `<div><b>提议：暂停广告组 ${esc(p.ad_group_id)}</b></div>${reason ? `<div class="muted">理由：${esc(reason)}</div>` : ""}`;
+  if (r.execution) {
+    const st = r.execution.status;
+    h += `<div class="row status-${esc(st)}"><b>${esc(EXEC[st] || st)}</b>${r.decision?.by ? `<span class="muted">（${esc(r.decision.by)}）</span>` : ""}</div>`;
+    if (r.execution.already_processed) h += `<div class="muted">数据库发现这个提议已经处理过（例如重复点击），这次没有再执行；以审批记录为准。</div>`;
+    div.innerHTML = h; return div;
+  }
+  if (r.status !== "awaiting_approval") { div.innerHTML = h; return div; }
+  h += r.can_approve ? "" : `<div class="note">你没有这个店铺的审批权限，按钮不可用（服务端同样会拒绝）。</div>`;
+  h += `<div class="row"><button class="primary" data-a="yes">批准并执行</button>
+          <input placeholder="拒绝理由（必填）" style="flex:1"><button class="danger" data-a="no">拒绝</button></div>
+        <div class="row"><button data-a="twice" class="muted">演示：同时发两次"批准"</button>
+          <span class="muted">两次请求并发到达，看审批记录里是否只执行了一次</span></div>`;
+  div.innerHTML = h;
+  const input = div.querySelector("input");
+  div.querySelectorAll("button[data-a]").forEach(b => { if (!r.can_approve) b.disabled = true; });
+  const send = (approved, rsn) => api("/api/approve", { thread_id:r.thread_id, approved, reason:rsn });
+  div.querySelector('[data-a="yes"]').onclick = () => call(card, () => send(true), r.thread_id).then(refreshLists);
+  div.querySelector('[data-a="no"]').onclick = () => {
+    if (!input.value.trim()) { input.focus(); input.placeholder = "拒绝必须填写理由"; return; }
+    call(card, () => send(false, input.value.trim()), r.thread_id).then(refreshLists);
+  };
+  div.querySelector('[data-a="twice"]').onclick = () => call(card, async () => {
+    const [a, b] = await Promise.all([send(true), send(true)]);
+    return { ...a, already_processed: a.already_processed || b.already_processed };
+  }, r.thread_id).then(refreshLists);
+  return div;
+}
+
+// ---------- 审批记录 ----------
+async function loadAudit() {
+  try {
+    const rows = await api("/api/audit");
+    if (!rows.length) { $("audit").innerHTML = `<div class="muted">暂无记录。</div>`; return; }
+    $("audit").innerHTML = `<table><tr><th>#</th><th>广告组</th><th>广告组现状</th><th>审批状态</th><th>发起</th><th>处理</th><th>理由</th><th>时间</th></tr>` +
+      rows.map(x => `<tr><td>${x.id}</td><td>${esc(x.ad_group_id)}</td><td>${esc(x.ad_group_status)}</td>
+        <td class="status-${esc(x.status)}">${esc(x.status)}</td><td>${esc(x.requested_by)}</td><td>${esc(x.decided_by || "")}</td>
+        <td>${esc(x.reason || "")}</td><td>${esc((x.decided_at || x.created_at || "").slice(0, 19).replace("T", " "))}</td></tr>`).join("") + "</table>";
+  } catch (e) { $("audit").innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
+}
+$("refresh").onclick = loadAudit;
+
+// ---------- 待我审批 ----------
+async function loadPending() {
+  try {
+    const rows = await api("/api/pending");
+    $("pendingbox").hidden = !rows.length;
+    $("pending").innerHTML = rows.map((x, i) => `<div class="row"><button data-i="${i}">打开</button>
+      <span><b>${esc(x.ad_group_id)}</b> · ${esc(x.requested_by)} 问：${esc(x.question || "")}</span>
+      <span class="muted">${esc((x.created_at || "").slice(0, 16).replace("T", " "))}</span></div>`).join("");
+    $("pending").querySelectorAll("button[data-i]").forEach(b => b.onclick = () => {
+      const x = rows[+b.dataset.i];
+      call(newCard(`${x.question || ""}（${x.requested_by} 发起）`), () => api(`/api/thread/${x.thread_id}`), x.thread_id);
+    });
+  } catch (e) { $("pendingbox").hidden = true; }
+}
+$("refreshPending").onclick = loadPending;
+const refreshLists = () => Promise.all([loadAudit(), loadPending()]);   // 审批记录变了，待审批列表也跟着刷新
+initUsers().catch(e => { $("turns").innerHTML = `<div class="card msg-bad">服务端连不上：${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>
